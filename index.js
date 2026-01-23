@@ -18,6 +18,24 @@ const {
     MessageMedia
 } = require('whatsapp-web.js');
 
+// Guarda el estado del menú por usuario
+const estadosUsuario = {};
+
+function menuPrincipal() {
+    return `*MENÚ PRINCIPAL*
+1 Información
+2 Soporte
+3 Horarios
+4 Salir`;
+}
+
+function menuSoporte() {
+    return `*SOPORTE TÉCNICO*
+1 Reportar problema
+2 Hablar con asesor
+0 Volver al menú`;
+}
+
 // -------------------------------------------------------------
 // Configuracion
 // -------------------------------------------------------------
@@ -42,7 +60,7 @@ function onlyDigits(s) {
 
 /**
  * Normaliza a digitos E.164 sin '+'. Si recibe 10 digitos, antepone pais MX (52).
- * Cambia '52' si tu pa�s base es otro.
+ * Cambia '52' si tu pais base es otro.
  */
 function toE164Digits(raw, defaultCountry = '52') {
     const digits = onlyDigits(raw);
@@ -188,7 +206,7 @@ client.on('ready', async () => {
   const myDigits = onlyDigits(myWid);                        // "5215511223344"
   numeroConectadoE164 = myDigits || null;                    // con lada pais
   numeroConectado10   = myDigits ? myDigits.slice(-10) : null; // 10 digitos MX
-  console.log(`[${ts()}] ?? Mi cuenta: wid=${myWid} | +${numeroConectadoE164} | local=${numeroConectado10}`);
+  console.log(`[${ts()}] Mi cuenta: wid=${myWid} | +${numeroConectadoE164} | local=${numeroConectado10}`);
   numeroConectado=numeroConectado10;
 	
     try {
@@ -198,29 +216,70 @@ client.on('ready', async () => {
     } catch (_) {}
 });
 
-// Auto-reply simple + NOTIFICACION A TU API
-client.on('message_create', async (message) => {
-    try {
-        if (message.fromMe) return;
-        if (message.from.endsWith('@g.us')) return;
+// 🔹 MANEJO DE MENSAJES
+client.on('message', async (msg) => {
 
-        const texto = (message.body || '').trim();
+    if (msg.from === 'status@broadcast') return;
+    if (msg.fromMe) return;
+    if (msg.from.endsWith('@g.us')) return;
 
-        console.log(`[${ts()}] WhatsApp | from=${message.from} | body="${texto}"`);
+    const texto = msg.body.trim();
+    const usuario = msg.from;
 
-        const respuesta = `Hola, soy el bot 🤖.\n\n¿En qué puedo ayudarte?`;
+    if (texto === 'menu') {
+        estadosUsuario[usuario] = 'MENU_PRINCIPAL';
+        await msg.reply(menuPrincipal());
+        return;
+    }
 
-        await client.sendMessage(message.from, respuesta);
+    if (!estadosUsuario[usuario]) return;
 
-        console.log(`[${ts()}] Respuesta enviada`);
+    if (estadosUsuario[usuario] === 'MENU_PRINCIPAL') {
+        switch (texto) {
+            case '1':
+                await msg.reply('Información general');
+                break;
 
-    } catch (err) {
-        console.error(`[${ts()}] Error al responder:`, err.message);
+            case '2':
+                estadosUsuario[usuario] = 'MENU_SOPORTE';
+                await msg.reply(menuSoporte());
+                break;
+
+            case '3':
+                await msg.reply('Horarios: L-V 9am - 6pm');
+                break;
+
+            case '4':
+                delete estadosUsuario[usuario];
+                await msg.reply('Gracias');
+                break;
+
+            default:
+                await msg.reply('Opción inválida\n\n' + menuPrincipal());
+        }
+        return;
+    }
+
+    if (estadosUsuario[usuario] === 'MENU_SOPORTE') {
+        switch (texto) {
+            case '1':
+                await msg.reply('Describe tu problema');
+                break;
+
+            case '2':
+                await msg.reply('Un asesor te contactará');
+                break;
+
+            case '0':
+                estadosUsuario[usuario] = 'MENU_PRINCIPAL';
+                await msg.reply(menuPrincipal());
+                break;
+
+            default:
+                await msg.reply('Opción inválida\n\n' + menuSoporte());
+        }
     }
 });
-
-
-
 
     // MENSAJE RECIBIDO. NOTIFICACIÓN A TU API
     try {
@@ -263,7 +322,7 @@ client.on('message_create', async (message) => {
 
 
 
-// Manejo b�sico de errores para no tumbar el proceso
+// Manejo bisico de errores para no tumbar el proceso
 process.on('unhandledRejection', (r) => console.error(`[${ts()}] unhandledRejection:`, r));
 process.on('uncaughtException', (e) => console.error(`[${ts()}] uncaughtException:`, e));
 
@@ -299,7 +358,7 @@ const server = http.createServer(async (req, res) => {
     for await (const chunk of req) buffers.push(chunk);
     const body = Buffer.concat(buffers).toString('utf8').trim();
 
-    console.log(`[${ts()}] Peticion recibida. Body: ${body || '(vac�o)'}`);
+    console.log(`[${ts()}] Peticion recibida. Body: ${body || '(vacio)'}`);
 
     if (!isReady) {
         res.statusCode = 503;
@@ -308,7 +367,7 @@ const server = http.createServer(async (req, res) => {
 
     if (!body) {
         res.statusCode = 200;
-        return res.end(JSON.stringify({ ok: true, message: 'Servidor de Whatsapp en l�nea' }));
+        return res.end(JSON.stringify({ ok: true, message: 'Servidor de Whatsapp en linea' }));
     }
 
     // Parse JSON
