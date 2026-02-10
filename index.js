@@ -31,7 +31,6 @@ function esEmailValido(email) {
 const OSTICKET_URL = 'http://127.0.0.1/osticket/upload/api/http.php/tickets.json';
 const OSTICKET_API_KEY = '5F446BFAB30F52E8DC24F0E7611DB2AD';
 
-
 function menuPrincipal() {
     return `*MENÚ PRINCIPAL*
 1 Información
@@ -519,8 +518,8 @@ client.on('message', async (msg) => {
                     '✅ Tu ticket ha sido creado correctamente en nuestro sistema.\n' +
                     'Un técnico te contactará pronto.\n\n' +
                     '¿Qué deseas hacer ahora?\n' +
-                    '1️⃣ Volver al menú\n' +
-                    '2️⃣ Salir'
+                    '1️ Volver al menú\n' +
+                    '2️ Salir'
                 );
 
             } catch (err) {
@@ -675,3 +674,4 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, hostname, () => {
     console.log(`[${ts()}] HTTP escuchando en http://${hostname}:${port}/`);
 });
+
