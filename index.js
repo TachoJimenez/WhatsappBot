@@ -17,9 +17,20 @@ const {
     LocalAuth,
     MessageMedia
 } = require('whatsapp-web.js');
+const conexion = require('./conexion');
 
 // Guarda el estado del menú por usuario
 const estadosUsuario = {};
+const esperandoNombre = {};
+const esperandoEmail = {};
+
+function esEmailValido(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(String(email || '').trim());
+}
+
+const OSTICKET_URL = 'http://127.0.0.1/osticket/upload/api/http.php/tickets.json';
+const OSTICKET_API_KEY = '5F446BFAB30F52E8DC24F0E7611DB2AD';
+
 
 function menuPrincipal() {
     return `*MENÚ PRINCIPAL*
@@ -40,9 +51,9 @@ function menuSoporte() {
 // Configuracion
 // -------------------------------------------------------------
 const hostname = '127.0.0.1';
-const port = process.env.PUERTO || 8086;
+const port = process.env.PUERTO || 8083;
 
-// N�meros para notificaciin de arranque (opcional, formato @c.us)
+// Nmeros para notificaciin de arranque (opcional, formato @c.us)
 var numeroConectado = "";
 const numeroInicio = "5215511223344@c.us"; // Numero que recibe aviso cuando arranca el servicio
 const numeroInicio2 = "";
@@ -169,6 +180,89 @@ async function sendToNumber(client, rawNumber, text, opts = {}) {
     }
 }
 
+function crearTicketOsTicket({ nombre, email, telefono, mensaje }) {
+  return new Promise((resolve, reject) => {
+
+    const payload = {
+      name: nombre,
+      email: email,
+      subject: `Soporte WhatsApp - ${telefono}`,
+      message: `📱 WhatsApp: ${telefono}\n\n${mensaje}`,
+      ip: "127.0.0.1"
+    };
+
+    const data = JSON.stringify(payload);
+
+    const u = new URL(OSTICKET_URL); 
+    // ej: http://localhost/osticket/upload/api/http.php/tickets.json
+
+    const isHttps = u.protocol === 'https:';
+    const lib = isHttps ? https : http;
+
+    const options = {
+      hostname: u.hostname,
+      port: u.port || (isHttps ? 443 : 80),
+      path: u.pathname + u.search, // ✅ importante
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-API-Key': OSTICKET_API_KEY,
+        'Content-Length': Buffer.byteLength(data)
+      }
+    };
+
+    console.log('--- osTicket REQUEST ---');
+    console.log('URL:', u.toString());
+    console.log('PAYLOAD:', payload);
+
+    const req = lib.request(options, (res) => {
+      let body = '';
+      res.on('data', (c) => body += c);
+      res.on('end', () => {
+        console.log('--- osTicket RESPONSE ---');
+        console.log('STATUS:', res.statusCode);
+        console.log('HEADERS:', res.headers);
+        console.log('BODY:', body);
+
+        // ✅ Si es éxito
+        if (res.statusCode === 201 || res.statusCode === 200) {
+          // osTicket a veces regresa "ticket number" en texto plano
+          // o a veces JSON. Intentamos parsear:
+          let parsed = null;
+          try { parsed = JSON.parse(body); } catch (_) {}
+
+          const ticketFromJson =
+            parsed?.ticket?.number ||
+            parsed?.number ||
+            parsed?.ticket_number ||
+            parsed?.id ||
+            null;
+
+          // si no es JSON, agarramos un número si viene como texto
+          const ticketFromText = (!ticketFromJson && typeof body === 'string')
+            ? (body.match(/\b\d{5,}\b/)?.[0] || null)
+            : null;
+
+          resolve({
+            status: res.statusCode,
+            headers: res.headers,
+            rawBody: body,
+            json: parsed,
+            ticket: ticketFromJson || ticketFromText
+          });
+        } else {
+          reject(new Error(`osTicket respondió ${res.statusCode}: ${body}`));
+        }
+      });
+    });
+
+    req.on('error', (err) => reject(err));
+    req.write(data);
+    req.end();
+  });
+}
+
 // -------------------------------------------------------------
 /** Cliente WhatsApp */
 // -------------------------------------------------------------
@@ -196,147 +290,301 @@ client.on('qr', (qr) => {
     qrcode.generate(qr, { small: true });
 });
 
-// Listo
-client.on('ready', async () => {
+async function onClientReady() {
+    if (isReady) return;
     isReady = true;
-    console.log(`[${ts()}] Conexion exitosa con WhatsApp`);
-	
- // ? NUEVO: obtener numero de la sesion
-  const myWid = client.info?.wid?._serialized || '';        // "5215511223344@c.us"
-  const myDigits = onlyDigits(myWid);                        // "5215511223344"
-  numeroConectadoE164 = myDigits || null;                    // con lada pais
-  numeroConectado10   = myDigits ? myDigits.slice(-10) : null; // 10 digitos MX
-  console.log(`[${ts()}] Mi cuenta: wid=${myWid} | +${numeroConectadoE164} | local=${numeroConectado10}`);
-  numeroConectado=numeroConectado10;
-	
+
     try {
-		await client.sendMessage(myWid, 'Te aviso. WhatsApp INICIADO');
-        if (numeroInicio) await client.sendMessage(numeroInicio, 'Primer Aviso. WhatsApp INICIADO');
-        if (numeroInicio2) await client.sendMessage(numeroInicio2, 'Segundo aviso. WhatsApp INICIADO');
-    } catch (_) {}
-});
+        console.log(`[${ts()}] WhatsApp conectado correctamente (Event/Force)`);
 
-// 🔹 MANEJO DE MENSAJES
-client.on('message', async (msg) => {
+        const myWid = client.info?.wid?._serialized || '';
+        const myDigits = onlyDigits(myWid);
+        numeroConectado = myDigits ? myDigits.slice(-10) : null;
 
-    if (msg.from === 'status@broadcast') return;
-    if (msg.fromMe) return;
-    if (msg.from.endsWith('@g.us')) return;
+        console.log(`[${ts()}] Mi número WhatsApp: ${myWid}`);
 
-    const texto = msg.body.trim();
-    const usuario = msg.from;
+        // Avisos por WhatsApp (con retardo para asegurar carga de chats)
+        setTimeout(async () => {
+            try {
+                if (numeroInicio) {
 
-    if (texto === 'menu') {
-        estadosUsuario[usuario] = 'MENU_PRINCIPAL';
-        await msg.reply(menuPrincipal());
-        return;
-    }
+                }
+            } catch (e) {
+                console.log(`[DEBUG] No se pudo enviar mensaje de inicio: ${e.message}`);
+            }
+        }, 3000);
 
-    if (!estadosUsuario[usuario]) return;
 
-    if (estadosUsuario[usuario] === 'MENU_PRINCIPAL') {
-        switch (texto) {
-            case '1':
-                await msg.reply('Información general');
-                break;
-
-            case '2':
-                estadosUsuario[usuario] = 'MENU_SOPORTE';
-                await msg.reply(menuSoporte());
-                break;
-
-            case '3':
-                await msg.reply('Horarios: L-V 9am - 6pm');
-                break;
-
-            case '4':
-                delete estadosUsuario[usuario];
-                await msg.reply('Gracias');
-                break;
-
-            default:
-                await msg.reply('Opción inválida\n\n' + menuPrincipal());
-        }
-        return;
-    }
-
-    if (estadosUsuario[usuario] === 'MENU_SOPORTE') {
-        switch (texto) {
-            case '1':
-                await msg.reply('Describe tu problema');
-                break;
-
-            case '2':
-                await msg.reply('Un asesor te contactará');
-                break;
-
-            case '0':
-                estadosUsuario[usuario] = 'MENU_PRINCIPAL';
-                await msg.reply(menuPrincipal());
-                break;
-
-            default:
-                await msg.reply('Opción inválida\n\n' + menuSoporte());
-        }
-    }
-});
-
-    // MENSAJE RECIBIDO. NOTIFICACIÓN A TU API
-    try {
-        const numeroOrigen10  = last10(message.from);
-        const numeroDestino10 = last10(numeroConectado);
-
-        const data = {
-            Numero_origen:  numeroOrigen10,
-            Numero_destino: numeroDestino10,
-            Mensaje:        message.body || ''
-        };
-
-        if (
-            url_notificacion &&
-            typeof url_notificacion === 'string' &&
-            url_notificacion.startsWith('http')
-        ) {
-            console.log(
-                `[${ts()}] Notificar API | ${url_notificacion} | ${JSON.stringify(data)}`
-            );
-
-            postJSON(url_notificacion, data)
-                .then(r => {
-                    console.log(`[${ts()}] API resp | status=${r.status}`);
-                })
-                .catch(err => {
-                    console.error(
-                        `[${ts()}] API err | ${err?.message || err}`
-                    );
-                });
-        } else {
-            console.log(`[${ts()}] Notificación API desactivada`);
-        }
 
     } catch (err) {
-        console.error(
-            `[${ts()}] notificacion_api_error | ${err?.message || err}`
-        );
+        console.error(`[${ts()}] Error en ready:`, err);
+    }
+}
+
+// Listo
+// Listo
+client.on('ready', onClientReady);
+
+client.on('message', async (msg) => {
+
+    if (msg.from === 'status@broadcast' || msg.to === 'status@broadcast') return;
+    if (msg.fromMe) return;
+    if (!msg.from.endsWith('@c.us')) return;
+
+    const textoOriginal = (msg.body || '').trim();
+
+    // Normalización: minúsculas y sin acentos
+    const normalizado = textoOriginal
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+    const usuario = msg.from;
+    const telefono = usuario.replace('@c.us', '');
+
+    console.log(`[${ts()}] Mensaje recibido de ${usuario}`);
+
+    try {
+        // 1. Comando universal 'menu'
+        if (normalizado === 'menu') {
+            const resultados = await conexion.query(
+                'SELECT nombre, email FROM contactos WHERE telefono = ?',
+                [telefono]
+            );
+
+            if (resultados.length === 0) {
+                // Usuario nuevo intentando entrar al menú -> iniciar registro
+                esperandoNombre[usuario] = true;
+                await msg.reply('Hola 👋\nPara brindarte una mejor atención, dime tu nombre por favor.');
+                return;
+            } else {
+                // Usuario ya registrado -> ir al menú principal
+                estadosUsuario[usuario] = 'MENU_PRINCIPAL';
+                await msg.reply(menuPrincipal());
+                return;
+            }
+        }
+
+        // 2. Manejo de Flujo de Registro (Captura de nombre)
+        if (esperandoNombre[usuario]) {
+            const nombre = textoOriginal; // Usamos el original para el nombre real
+
+            await conexion.query(
+                'INSERT INTO contactos (telefono, nombre, fecha_registro, ultima_conversacion) VALUES (?, ?, NOW(), NOW())',
+                [telefono, nombre]
+            );
+
+            delete esperandoNombre[usuario];
+            estadosUsuario[usuario] = 'MENU_PRINCIPAL';
+
+            await msg.reply(`Gracias ${nombre} 🙌\nTu registro fue exitoso.\n\n${menuPrincipal()}`);
+            return;
+        }
+
+        // ✅ ANEXO EMAIL: si estamos esperando el email de este usuario
+        if (esperandoEmail[usuario]) {
+
+            // permitir cancelar (0 o menu)
+            if (normalizado === '0' || normalizado === 'menu') {
+                delete esperandoEmail[usuario];
+                estadosUsuario[usuario] = 'MENU_PRINCIPAL';
+                await msg.reply('Operación cancelada.\n\n' + menuPrincipal());
+                return;
+            }
+
+            const emailIngresado = textoOriginal.trim();
+
+            if (!esEmailValido(emailIngresado)) {
+                await msg.reply(
+                    '❌ Ese correo no parece válido.\n' +
+                    'Escríbelo de nuevo (ej: nombre@dominio.com) o escribe *0* para cancelar.'
+                );
+                return;
+            }
+
+            await conexion.query(
+                'UPDATE contactos SET email = ?, ultima_conversacion = NOW() WHERE telefono = ?',
+                [emailIngresado, telefono]
+            );
+
+            delete esperandoEmail[usuario];
+
+            // regresar al flujo del ticket (sin cambiar tu lógica)
+            estadosUsuario[usuario] = 'CREANDO_TICKET';
+            await msg.reply('✅ Listo, correo guardado.\nAhora escribe tu problema para crear el ticket.');
+            return;
+        }
+
+        // 3. Manejo de Menús (Solo si el usuario tiene un estado activo)
+        const estado = estadosUsuario[usuario];
+
+        if (estado === 'MENU_PRINCIPAL') {
+            switch (normalizado) {
+                case '1':
+                    await msg.reply('📄 *Información general*\nSomos una empresa dedicada al soporte técnico y soluciones digitales.');
+                    break;
+                case '2':
+                    estadosUsuario[usuario] = 'MENU_SOPORTE';
+                    await msg.reply(menuSoporte());
+                    break;
+                case '3':
+                    await msg.reply('🕒 *Horarios*\nAtendemos de Lunes a Viernes de 9:00 AM a 6:00 PM.');
+                    break;
+                case '4':
+                    delete estadosUsuario[usuario];
+                    await msg.reply('¡Hasta pronto! 👋 Si necesitas algo más, solo escribe *menu*.');
+                    break;
+                default:
+                    await msg.reply('⚠️ Opción inválida.\n\n' + menuPrincipal());
+            }
+            return;
+        }
+
+        if (estado === 'MENU_SOPORTE') {
+            switch (normalizado) {
+                case '1': {
+                    // ✅ AJUSTE: Primero pedir correo (si no existe), luego pedir problema
+                    const contacto = await conexion.query(
+                        'SELECT email FROM contactos WHERE telefono = ?',
+                        [telefono]
+                    );
+
+                    const email = contacto[0]?.email || null;
+
+                    if (!email) {
+                        esperandoEmail[usuario] = true;
+                        await msg.reply(
+                            '📧 Antes de crear el ticket necesito tu *correo real*.\n' +
+                            'Escríbelo (ej: nombre@dominio.com) o escribe *0* para cancelar.'
+                        );
+                        return;
+                    }
+
+                    // ✅ Ya tiene email -> ahora sí pedir el problema
+                    estadosUsuario[usuario] = 'CREANDO_TICKET';
+                    await msg.reply('✉️ Describe tu problema con el mayor detalle posible para generar tu ticket.');
+                    return;
+                }
+
+                case '2':
+                    await msg.reply('👨‍💻 Un asesor humano revisará tu chat pronto para ayudarte.');
+                    break;
+
+                case '0':
+                    estadosUsuario[usuario] = 'MENU_PRINCIPAL';
+                    await msg.reply(menuPrincipal());
+                    break;
+
+                default:
+                    await msg.reply('⚠️ Opción inválida.\n\n' + menuSoporte());
+            }
+            return;
+        }
+
+        if (estado === 'CREANDO_TICKET') {
+            // Permitir cancelar
+            if (normalizado === '0' || normalizado === 'menu') {
+                estadosUsuario[usuario] = 'MENU_PRINCIPAL';
+                await msg.reply(menuPrincipal());
+                return;
+            }
+
+            // ✅ Ahora también traemos email
+            const contacto = await conexion.query(
+                'SELECT nombre, email FROM contactos WHERE telefono = ?',
+                [telefono]
+            );
+
+            const nombre = contacto[0]?.nombre || 'Usuario WhatsApp';
+            const email = contacto[0]?.email || null;
+
+            // ✅ Si no hay email (por si acaso), pedirlo y NO crear ticket todavía
+            if (!email) {
+                esperandoEmail[usuario] = true;
+                await msg.reply(
+                    '📧 Antes de crear el ticket necesito tu *correo real*.\n' +
+                    'Escríbelo (ej: nombre@dominio.com) o escribe *0* para cancelar.'
+                );
+                return;
+            }
+
+            try {
+                // ✅ Pasamos email real
+                await crearTicketOsTicket({ nombre, email, telefono, mensaje: textoOriginal });
+
+                // ✅ NUEVO: después del ticket preguntamos qué desea hacer
+                estadosUsuario[usuario] = 'POST_TICKET';
+
+                await msg.reply(
+                    '✅ Tu ticket ha sido creado correctamente en nuestro sistema.\n' +
+                    'Un técnico te contactará pronto.\n\n' +
+                    '¿Qué deseas hacer ahora?\n' +
+                    '1️⃣ Volver al menú\n' +
+                    '2️⃣ Salir'
+                );
+
+            } catch (err) {
+                console.error('Error osTicket:', err);
+
+                // No borramos el estado aquí para que pueda reintentar o escribir '0' para salir
+                await msg.reply('❌ Hubo un error al crear el ticket.\n\n' +
+                    '1. Escribe de nuevo tu problema para *reintentar*.\n' +
+                    '2. Escribe *0* para cancelar y volver al menú.');
+            }
+            return;
+        }
+
+        // ✅ NUEVO ESTADO: qué hacer después de crear ticket
+        if (estado === 'POST_TICKET') {
+            switch (normalizado) {
+                case '1':
+                    estadosUsuario[usuario] = 'MENU_PRINCIPAL';
+                    await msg.reply(menuPrincipal());
+                    break;
+
+                case '2':
+                    delete estadosUsuario[usuario];
+                    await msg.reply('¡Listo! 👋 Si necesitas algo más, escribe *menu*.');
+                    break;
+
+                default:
+                    await msg.reply(
+                        '⚠️ Opción inválida.\n' +
+                        'Responde con:\n' +
+                        '1 Volver al menú\n' +
+                        '2️ Salir'
+                    );
+            }
+            return;
+        }
+
+    } catch (error) {
+        console.error('Error procesando mensaje:', error);
+    } finally {
+        // 4. Notificación a la API (independiente de si el bot respondió o no)
+        try {
+            const numeroOrigen10 = last10(msg.from);
+            const numeroDestino10 = last10(numeroConectado);
+
+            const data = {
+                Numero_origen: numeroOrigen10,
+                Numero_destino: numeroDestino10,
+                Mensaje: textoOriginal
+            };
+
+            if (url_notificacion && url_notificacion.startsWith('http')) {
+                postJSON(url_notificacion, data).catch(err =>
+                    console.error(`[API err] ${err?.message || err}`)
+                );
+            }
+        } catch (_) { }
     }
 
-
+});
 
 // Manejo bisico de errores para no tumbar el proceso
 process.on('unhandledRejection', (r) => console.error(`[${ts()}] unhandledRejection:`, r));
 process.on('uncaughtException', (e) => console.error(`[${ts()}] uncaughtException:`, e));
-
-client.on('ready', async () => {
-    console.log(`[${ts()}] Conectado a WhatsApp`);
-
-    // 🔴 PARCHE: desactivar sendSeen (bug markedUnread)
-    await client.pupPage.evaluate(() => {
-        if (window.WWebJS && window.WWebJS.sendSeen) {
-            window.WWebJS.sendSeen = async () => {};
-        }
-    });
-});
-
 
 client.initialize();
 
