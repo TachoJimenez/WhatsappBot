@@ -29,7 +29,7 @@ function esEmailValido(email) {
 }
 
 const OSTICKET_URL = 'http://127.0.0.1/osticket/upload/api/http.php/tickets.json';
-const OSTICKET_API_KEY = '5F446BFAB30F52E8DC24F0E7611DB2AD';
+const OSTICKET_API_KEY = 'E86202488D7FE28EF3D1571B97961360';
 
 
 function menuPrincipal() {
