@@ -1,0 +1,4 @@
+﻿node_modules/
+.env
+.webjs_auth/
+.webjs_cache/
