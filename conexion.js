@@ -1,3 +1,4 @@
+
 const mysql = require('mysql2/promise');
 
 class Conexion {
@@ -19,4 +20,3 @@ class Conexion {
     }
 }
 
-module.exports = new Conexion();
