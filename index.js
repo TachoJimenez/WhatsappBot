@@ -6,6 +6,8 @@
  * - Respuestas JSON consistentes
  * Requisitos: Node 16+, whatsapp-web.js, qrcode-terminal
  */
+require('dotenv').config();
+
 
 const http = require('http');
 const https = require('https');            // ? agregado
@@ -25,8 +27,8 @@ function esEmailValido(email) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(String(email || '').trim());
 }
 
-const OSTICKET_URL = 'http://127.0.0.1/osticket/upload/api/http.php/tickets.json';
-const OSTICKET_API_KEY = '43AA00E7918BB8D597DD009FA7BC3F3B';
+const OSTICKET_URL = process.env.OSTICKET_API_URL;
+const OSTICKET_API_KEY = process.env.OSTICKET_API_KEY;
 
 
 function menuPrincipal() {
