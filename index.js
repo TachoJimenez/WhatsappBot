@@ -354,20 +354,44 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
 
     // ✅ Construir adjuntos si existen
     const attachments = [];
+
+    // archivoPath aquí en realidad es el objeto "media" de whatsapp-web.js (downloadMedia())
     if (archivoPath && archivoPath.data) {
-        const ext = getExtension(archivoPath.mimetype);
-        const name = archivoPath.filename || `archivo-adjunto${ext}`;
+        let base64 = archivoPath.data;
+        let type = archivoPath.mimetype || 'application/octet-stream';
+
+        // ✅ Asegurar SOLO base64 (si viene data:image/...;base64,... lo limpiamos)
+        if (typeof base64 === 'string' && base64.includes('base64,')) {
+            base64 = base64.split('base64,')[1];
+        }
+
+        // ✅ Asegurar nombre + extensión
+        let fileName = archivoPath.filename && String(archivoPath.filename).trim()
+            ? String(archivoPath.filename).trim()
+            : null;
+
+        if (!fileName) {
+            const ext = getExtension(type) || '.bin'; // tu getExtension debe devolver ".jpg", ".png", etc.
+            fileName = `archivo-adjunto${ext}`;
+        } else {
+            // si viene sin extensión, la agregamos según mimetype
+            if (!fileName.includes('.') && type.includes('/')) {
+                const ext = getExtension(type) || '';
+                if (ext) fileName += ext;
+            }
+        }
+
+        // ✅ Log útil para confirmar que NO son 29 bytes
+        console.log('[Adjunto] name:', fileName, '| type:', type, '| base64 length:', base64?.length);
 
         attachments.push({
-            "name": name,
-            "data": archivoPath.data, // SOLO base64 sin prefijo
-            "type": archivoPath.mimetype,
-            "encoding": "base64"  // INDICAR encoding explícito
+            name: fileName,
+            data: base64,   // ✅ SOLO base64 limpio
+            type: type
         });
     }
 
     // ✅ Crear ticket en osTicket
-    // (tu función actual devuelve body como string con el ID, ej: "668335")
     const respuestaOsTicket = await crearTicketOsTicket({
         nombre,
         email,
@@ -377,7 +401,6 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
     });
 
     // Intentar extraer ID del body
-    // (Ajuste para tu funcion que retorna objeto complejo)
     let bodyStr = '';
     if (typeof respuestaOsTicket === 'string') bodyStr = respuestaOsTicket;
     else if (respuestaOsTicket.ticket) bodyStr = String(respuestaOsTicket.ticket);
@@ -393,7 +416,6 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
         [telefono, nombre, email, mensajeCompleto, idTicketCreado, tipoUsuario]
     );
 
-    // ✅ Estado post ticket (tu misma idea)
     estadosUsuario[usuario] = 'POST_TICKET';
 
     await msg.reply(
@@ -483,16 +505,12 @@ client.on('message', async (msg) => {
 
     // Helper: intenta extraer el ID del ticket sin importar el tipo de respuesta
     const extraerTicketId = (respuestaOsTicket) => {
-        // Caso 1: si tu función devuelve el ID como string (ej: "668335")
         if (typeof respuestaOsTicket === 'string') {
             const id = respuestaOsTicket.trim();
             return id || null;
         }
-
-        // Caso 2: si tu función devuelve un número
         if (typeof respuestaOsTicket === 'number') return String(respuestaOsTicket);
 
-        // Caso 3: si devuelve objeto: { ticketId }, { ticket }, { body }, { rawBody }
         if (respuestaOsTicket && typeof respuestaOsTicket === 'object') {
             if (respuestaOsTicket.ticketId) return String(respuestaOsTicket.ticketId).trim();
             if (respuestaOsTicket.ticket) return String(respuestaOsTicket.ticket).trim();
@@ -503,7 +521,6 @@ client.on('message', async (msg) => {
                 return id || null;
             }
         }
-
         return null;
     };
 
@@ -516,7 +533,6 @@ client.on('message', async (msg) => {
             );
 
             if (resultados.length === 0 || resultados[0].tipo_usuario === 'invitado') {
-                // Usuario NO registrado -> Preguntar
                 estadosUsuario[usuario] = 'SELECCION_INGRESO';
                 await msg.reply(
                     'Hola 👋\nNo te encuentras registrado en nuestra base de datos.\n\n' +
@@ -526,10 +542,8 @@ client.on('message', async (msg) => {
                 );
                 return;
             } else {
-                // Usuario registrado -> Saludo personalizado
                 const nombre = resultados[0].nombre;
                 estadosUsuario[usuario] = 'MENU_PRINCIPAL';
-                // Saludo con nombre y número
                 await msg.reply(
                     `Hola *${nombre}* con el número *${telefono}*, es un gusto verte de nuevo.\n` +
                     `Por favor escoge una opción del menú.\n\n${menuPrincipal()}`
@@ -541,9 +555,7 @@ client.on('message', async (msg) => {
         // 2. Manejo de Selección (Invitado vs Registro)
         if (estadosUsuario[usuario] === 'SELECCION_INGRESO') {
             if (normalizado === '1') {
-                // Invitado -> Lo registramos como tal si no existe, o actualizamos
                 const nombreInvitado = 'Invitado';
-                // Insertamos o ignoramos si ya existe, marcándolo como invitado
                 await conexion.query(
                     `INSERT INTO contactos (telefono, nombre, tipo_usuario, fecha_registro, ultima_conversacion) 
                      VALUES (?, ?, 'invitado', NOW(), NOW())
@@ -554,7 +566,6 @@ client.on('message', async (msg) => {
                 estadosUsuario[usuario] = 'MENU_PRINCIPAL';
                 await msg.reply(`Entendido, continúas como *Invitado*.\n\n${menuPrincipal()}`);
             } else if (normalizado === '2') {
-                // Registrarse
                 delete estadosUsuario[usuario];
                 esperandoNombre[usuario] = true;
                 await msg.reply('Perfecto. Por favor, dime tu nombre para registrarte.');
@@ -568,7 +579,6 @@ client.on('message', async (msg) => {
         if (esperandoNombre[usuario]) {
             const nombre = textoOriginal;
 
-            // Insertar o actualizar como usuario interno
             await conexion.query(
                 `INSERT INTO contactos (telefono, nombre, tipo_usuario, fecha_registro, ultima_conversacion) 
                  VALUES (?, ?, 'interno', NOW(), NOW())
@@ -583,10 +593,9 @@ client.on('message', async (msg) => {
             return;
         }
 
-        // ✅ ANEXO EMAIL: si estamos esperando el email de este usuario
+        // ✅ ANEXO EMAIL
         if (esperandoEmail[usuario]) {
 
-            // permitir cancelar (0 o menu)
             if (normalizado === '0' || normalizado === 'menu') {
                 delete esperandoEmail[usuario];
                 estadosUsuario[usuario] = 'MENU_PRINCIPAL';
@@ -611,13 +620,12 @@ client.on('message', async (msg) => {
 
             delete esperandoEmail[usuario];
 
-            // regresar al flujo del ticket
             estadosUsuario[usuario] = 'CREANDO_TICKET';
             await msg.reply('✅ Listo, correo guardado.\nAhora escribe tu problema para crear el ticket.\n\nCuando termines, escribe la palabra *FIN*.');
             return;
         }
 
-        // 4. Manejo de Menús (Solo si el usuario tiene un estado activo)
+        // 4. Manejo de Menús
         const estado = estadosUsuario[usuario];
 
         if (estado === 'MENU_PRINCIPAL') {
@@ -645,7 +653,6 @@ client.on('message', async (msg) => {
         if (estado === 'MENU_SOPORTE') {
             switch (normalizado) {
                 case '1':
-                    // Opción 1: Crear Nuevo Ticket -> Ir a selección de tema
                     estadosUsuario[usuario] = 'SELECCIONAR_TEMA';
                     {
                         let msgTemas = '📂 *Selecciona un Tema de Ayuda:*\n';
@@ -656,8 +663,8 @@ client.on('message', async (msg) => {
                         await msg.reply(msgTemas);
                     }
                     break;
+
                 case '2':
-                    // Opción 2: Consultar Estatus -> Listar últimos tickets
                     try {
                         const tickets = await conexion.query(
                             'SELECT id, ticket_id_osticket, fecha_creacion, mensaje FROM tickets_whatsapp WHERE telefono = ? ORDER BY id DESC LIMIT 5',
@@ -681,7 +688,6 @@ client.on('message', async (msg) => {
                         console.error('Error consultando tickets:', error);
                         await msg.reply('❌ Error consultando tus tickets.');
                     }
-                    // Mantenemos al usuario en "limbo" o MENU_PRINCIPAL para que con "0" o "menu" salga
                     estadosUsuario[usuario] = 'MENU_PRINCIPAL';
                     break;
 
@@ -689,6 +695,7 @@ client.on('message', async (msg) => {
                     estadosUsuario[usuario] = 'MENU_PRINCIPAL';
                     await msg.reply(menuPrincipal());
                     break;
+
                 default:
                     await msg.reply('⚠️ Opción inválida.\n\n' + menuSoporte());
             }
@@ -704,7 +711,6 @@ client.on('message', async (msg) => {
                     topicName: OSTICKET_TOPICS[normalizado]
                 };
 
-                // NUEVO FLUJO: Verificar si ya tiene email
                 const contacto = await conexion.query(
                     'SELECT email FROM contactos WHERE telefono = ?',
                     [telefono]
@@ -712,10 +718,7 @@ client.on('message', async (msg) => {
                 const email = contacto[0]?.email;
 
                 if (!email) {
-                    // Si NO tiene email, pedirlo
                     esperandoEmail[usuario] = true;
-                    // Borramos estado de tema para que al terminar email se setee CREANDO_TICKET
-                    // OJO: esperandoEmail al terminar setea CREANDO_TICKET automáticamente
                     delete estadosUsuario[usuario];
 
                     await msg.reply(
@@ -723,7 +726,6 @@ client.on('message', async (msg) => {
                         'Por favor escríbelo (ej: nombre@dominio.com) o escribe *0* para cancelar.'
                     );
                 } else {
-                    // Si YA tiene email, directo a describir problema
                     estadosUsuario[usuario] = 'CREANDO_TICKET';
                     bufferTicket[usuario] = [];
 
@@ -745,27 +747,17 @@ client.on('message', async (msg) => {
             return;
         }
 
-        // ===============================
-        // ✅ DENTRO de client.on('message', ...)
-        // SOLO actualiza este bloque (CREANDO_TICKET + POST_TICKET)
-        // ===============================
-
         if (estado === 'CREANDO_TICKET') {
 
-            // Permitir cancelar
             if (normalizado === '0' || normalizado === 'menu') {
                 estadosUsuario[usuario] = 'MENU_PRINCIPAL';
                 await msg.reply(menuPrincipal());
                 return;
             }
 
-            // ✅ Si estás construyendo el mensaje por partes y usas "fin":
-            // Guarda el texto en memoria hasta que llegue "fin"
-            // (Esto mantiene tu lógica: el ticket se crea al escribir FIN)
-            bufferTicket = bufferTicket || {}; // por si no existe
+            bufferTicket = bufferTicket || {};
             bufferTicket[usuario] = bufferTicket[usuario] || [];
 
-            // Si el usuario escribe FIN => preguntar adjunto SI/NO
             if (normalizado === 'fin') {
                 const mensajeCompleto = bufferTicket[usuario].join('\n').trim();
 
@@ -774,7 +766,6 @@ client.on('message', async (msg) => {
                     return;
                 }
 
-                // Guardamos temporalmente el mensaje y preguntamos por adjunto
                 pendientesAdjunto = pendientesAdjunto || {};
                 pendientesAdjunto[usuario] = { mensajeCompleto };
 
@@ -783,39 +774,30 @@ client.on('message', async (msg) => {
                 return;
             }
 
-            // Si no es FIN, acumular texto
             bufferTicket[usuario].push(textoOriginal);
-            // await msg.reply('✅ Anotado. Cuando termines escribe *fin* para crear el ticket.'); // Opcional feedback
             return;
         }
 
-
-        // ✅ Estado para decidir adjunto (1 sí / 2 no)
         if (estado === 'PREGUNTA_ADJUNTO') {
-            // seguridad
             pendientesAdjunto = pendientesAdjunto || {};
             const dataPendiente = pendientesAdjunto[usuario];
 
             if (!dataPendiente?.mensajeCompleto) {
-                // si por alguna razón no existe, regresamos al flujo de ticket
                 estadosUsuario[usuario] = 'CREANDO_TICKET';
                 await msg.reply('⚠️ Ocurrió un detalle. Escribe tu problema de nuevo y al final escribe *fin*.');
                 return;
             }
 
             if (normalizado === '1') {
-                // Sí adjuntar => pasar a estado que espera archivo
                 estadosUsuario[usuario] = 'ESPERANDO_ARCHIVO';
                 await msg.reply('📎 Perfecto. Envía el archivo ahora (imagen, PDF, etc.).');
                 return;
             }
 
             if (normalizado === '2') {
-                // No adjuntar => finalizar creación del ticket
                 try {
                     await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, null);
 
-                    // limpiar buffers
                     delete pendientesAdjunto[usuario];
                     delete bufferTicket?.[usuario];
 
@@ -835,10 +817,9 @@ client.on('message', async (msg) => {
             return;
         }
 
-
         // ✅ Recibir el archivo si dijo "1 Sí"
         if (estado === 'ESPERANDO_ARCHIVO') {
-            // Si manda "2" o "no", se interpreta como NO adjuntar
+
             if (normalizado === '2' || normalizado === 'no') {
                 estadosUsuario[usuario] = 'PREGUNTA_ADJUNTO';
                 await msg.reply('📎 Entendido. Responde:\n2 No');
@@ -855,15 +836,32 @@ client.on('message', async (msg) => {
                     return;
                 }
 
-                // Verificar si tiene medios
                 if (msg.hasMedia) {
                     try {
                         const media = await msg.downloadMedia();
-                        if (media) {
+                        if (media && media.data) {
+
+                            // ✅ NUEVO: Forzar nombre y extensión reales (evita que quede "name" y se baje como TXT)
+                            let fileName = 'archivo-adjunto';
+                            if (media.filename && String(media.filename).trim()) {
+                                fileName = media.filename;
+                            } else {
+                                const ext = (media.mimetype && media.mimetype.includes('/'))
+                                    ? media.mimetype.split('/')[1]
+                                    : 'bin';
+                                fileName = `${fileName}.${ext}`;
+                            }
+
+                            // IMPORTANTÍSIMO: asegurar que exista filename para tu flujo posterior
+                            media.filename = fileName;
+
+                            console.log('Adjunto preparado correctamente:', fileName, media.mimetype);
+
                             // Enviamos con el archivo descargado en memoria (base64)
                             await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, media);
+
                         } else {
-                            throw new Error('No se pudo descargar el medio.');
+                            throw new Error('No se pudo descargar el medio (sin data).');
                         }
                     } catch (downloadErr) {
                         console.error('Error descargando media:', downloadErr);
@@ -871,7 +869,6 @@ client.on('message', async (msg) => {
                         return;
                     }
                 } else {
-                    // Si no es un archivo y no es comando de cancelación
                     if (normalizado === '0') {
                         estadosUsuario[usuario] = 'MENU_PRINCIPAL';
                         await msg.reply(menuPrincipal());
@@ -882,7 +879,6 @@ client.on('message', async (msg) => {
                     return;
                 }
 
-                // limpiar buffers
                 delete pendientesAdjunto[usuario];
                 delete bufferTicket?.[usuario];
 
@@ -898,8 +894,6 @@ client.on('message', async (msg) => {
             return;
         }
 
-
-        // ✅ NUEVO ESTADO: qué hacer después de crear ticket (tu misma lógica)
         if (estado === 'POST_TICKET') {
             switch (normalizado) {
                 case '1':
@@ -926,7 +920,6 @@ client.on('message', async (msg) => {
     } catch (error) {
         console.error('Error procesando mensaje:', error);
     } finally {
-        // 5. Notificación a la API
         try {
             const numeroOrigen10 = last10(msg.from);
             const numeroDestino10 = last10(numeroConectado);
