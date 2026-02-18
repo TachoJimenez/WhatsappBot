@@ -111,18 +111,21 @@ function last10(raw) {
 
 /** Helper para extensión de archivo */
 function getExtension(mimetype) {
-    switch (mimetype) {
-        case 'application/pdf': return '.pdf';
-        case 'image/jpeg': return '.jpg';
-        case 'image/png': return '.png';
-        case 'text/plain': return '.txt';
-        case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': return '.docx';
-        case 'application/msword': return '.doc';
-        case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': return '.xlsx';
-        case 'application/vnd.ms-excel': return '.xls';
-        default: return '.bin';
-    }
+    const map = {
+        'image/jpeg': '.jpg',
+        'image/png': '.png',
+        'image/webp': '.webp',
+        'image/gif': '.gif',
+        'application/pdf': '.pdf',
+        'application/msword': '.doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+        'application/vnd.ms-excel': '.xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+        'text/plain': '.txt'
+    };
+    return map[mimetype] || '';
 }
+
 
 /** POST JSON (http/https nativo) */
 function postJSON(urlString, data) {
@@ -220,6 +223,39 @@ async function sendToNumber(client, rawNumber, text, opts = {}) {
 function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attachments = [] }) {
     return new Promise((resolve, reject) => {
 
+        const safeAttachments = (attachments || []).map(a => {
+
+            let data = a.data;
+            let type = a.type;
+            let name = a.name;
+
+            // Si viene en formato data:image/jpeg;base64,...
+            if (typeof data === 'string' && data.includes('base64,')) {
+                data = data.split('base64,')[1];
+            }
+
+            // 🔥 Detectar tipo si no viene definido
+            if (!type || type === 'application/octet-stream') {
+                if (name.endsWith('.jpg') || name.endsWith('.jpeg')) {
+                    type = 'image/jpeg';
+                } else if (name.endsWith('.png')) {
+                    type = 'image/png';
+                } else if (name.endsWith('.pdf')) {
+                    type = 'application/pdf';
+                } else if (name.endsWith('.doc')) {
+                    type = 'application/msword';
+                } else if (name.endsWith('.docx')) {
+                    type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+                }
+            }
+
+            return {
+                name: name,
+                data: data,
+                type: type
+            };
+        });
+
         const payload = {
             name: nombre,
             email: email,
@@ -227,21 +263,19 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
             message: `📱 WhatsApp: ${telefono}\n\n${mensaje}`,
             ip: "127.0.0.1",
             topicId: topicId || 1,
-            attachments: attachments // Array de {name: "x.jpg", data: "base64...", type: "image/jpeg"}
+            attachments: safeAttachments
         };
 
         const data = JSON.stringify(payload);
 
         const u = new URL(OSTICKET_URL);
-        // ej: http://localhost/osticket/upload/api/http.php/tickets.json
-
         const isHttps = u.protocol === 'https:';
         const lib = isHttps ? https : http;
 
         const options = {
             hostname: u.hostname,
             port: u.port || (isHttps ? 443 : 80),
-            path: u.pathname + u.search, // ✅ importante
+            path: u.pathname + u.search,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -253,7 +287,6 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
 
         console.log('--- osTicket REQUEST ---');
         console.log('URL:', u.toString());
-        // console.log('PAYLOAD:', payload); // Demasiado largo con adjuntos
 
         const req = lib.request(options, (res) => {
             let body = '';
@@ -264,10 +297,7 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
                 console.log('HEADERS:', res.headers);
                 console.log('BODY:', body);
 
-                // ✅ Si es éxito
                 if (res.statusCode === 201 || res.statusCode === 200) {
-                    // osTicket a veces regresa "ticket number" en texto plano
-                    // o a veces JSON. Intentamos parsear:
                     let parsed = null;
                     try { parsed = JSON.parse(body); } catch (_) { }
 
@@ -278,7 +308,6 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
                         parsed?.id ||
                         null;
 
-                    // si no es JSON, agarramos un número si viene como texto
                     const ticketFromText = (!ticketFromJson && typeof body === 'string')
                         ? (body.match(/\b\d{5,}\b/)?.[0] || null)
                         : null;
@@ -406,7 +435,7 @@ async function onClientReady() {
     isReady = true;
 
     try {
-        console.log(`[${ts()}] WhatsApp conectado correctamente (Event/Force)`);
+        console.log(`[${ts()}] WhatsApp conectado correctamente`);
 
         const myWid = client.info?.wid?._serialized || '';
         const myDigits = onlyDigits(myWid);
@@ -584,7 +613,7 @@ client.on('message', async (msg) => {
 
             // regresar al flujo del ticket
             estadosUsuario[usuario] = 'CREANDO_TICKET';
-            await msg.reply('✅ Listo, correo guardado.\nAhora escribe tu problema para crear el ticket.');
+            await msg.reply('✅ Listo, correo guardado.\nAhora escribe tu problema para crear el ticket.\n\nCuando termines, escribe la palabra *FIN*.');
             return;
         }
 
