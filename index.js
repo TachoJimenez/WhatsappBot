@@ -10,8 +10,8 @@ require('dotenv').config();
 
 
 const http = require('http');
-const https = require('https');            // ? agregado
-const { URL } = require('url');            // ? agregado
+const https = require('https');
+const { URL } = require('url');
 const fs = require('fs');
 const qrcode = require('qrcode-terminal');
 const {
@@ -20,6 +20,174 @@ const {
     MessageMedia
 } = require('whatsapp-web.js');
 const conexion = require('./conexion');
+const { ImapFlow } = require('imapflow');
+const { simpleParser } = require('mailparser');
+
+function ts() {
+    return new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+}
+
+function onlyDigits(s) {
+    return String(s || '').replace(/\D/g, '');
+}
+
+/**
+ * Normaliza a digitos E.164 sin '+'. Si recibe 10 digitos, antepone pais MX (52).
+ * Cambia '52' si tu pais base es otro.
+ */
+function toE164Digits(raw, defaultCountry = '52') {
+    const digits = onlyDigits(raw);
+    if (!digits) return '';
+    if (digits.startsWith(defaultCountry)) return digits;
+    if (digits.length === 10) return defaultCountry + digits; // nacional MX
+    return digits; // ya trae pais
+}
+
+/** Devuelve ultimos 10 digitos (util para MX local) */
+function last10(raw) {
+    const d = onlyDigits(raw);
+    return d.slice(-10);
+}
+
+/** POST JSON (http/https nativo) */
+function postJSON(urlString, data) {
+    return new Promise((resolve, reject) => {
+        try {
+            const u = new URL(urlString);
+            const body = JSON.stringify(data);
+            const isHttps = u.protocol === 'https:';
+            const lib = isHttps ? https : http;
+
+            const options = {
+                hostname: u.hostname,
+                port: u.port || (isHttps ? 443 : 80),
+                path: u.pathname + (u.search || ''),
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(body)
+                },
+                timeout: 10000
+            };
+
+            const req = lib.request(options, (res) => {
+                let chunks = [];
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => {
+                    const text = Buffer.concat(chunks).toString('utf8');
+                    resolve({ status: res.statusCode, body: text });
+                });
+            });
+
+            req.on('error', reject);
+            req.on('timeout', () => {
+                req.destroy(new Error('timeout'));
+            });
+
+            req.write(body);
+            req.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attachments = [] }) {
+    return new Promise((resolve, reject) => {
+
+        const safeAttachments = (attachments || []).map(a => {
+            let data = a.data;
+            let type = a.type || 'application/octet-stream';
+            let name = a.name || 'archivo';
+
+            if (typeof data === 'string' && data.includes('base64,')) {
+                data = data.split('base64,')[1];
+            }
+
+            // Detectar tipo si no viene definido
+            if (!type || type === 'application/octet-stream') {
+                const low = name.toLowerCase();
+                if (low.endsWith('.jpg') || low.endsWith('.jpeg')) type = 'image/jpeg';
+                else if (low.endsWith('.png')) type = 'image/png';
+                else if (low.endsWith('.pdf')) type = 'application/pdf';
+                // ... (el resto de detecciones se mantienen si es necesario, 
+                // pero aquí lo simplificamos porque ya lo corregimos en finalizarCreacionTicket)
+            }
+
+            const obj = {};
+            obj[name] = `data:${type};base64,${data}`;
+            return obj;
+        });
+
+        const payload = {
+            name: nombre,
+            email: email,
+            subject: telefono ? `Soporte WhatsApp - ${telefono}` : `Soporte Email - ${email}`,
+            message: telefono ? `📱 WhatsApp: ${telefono}\n\n${mensaje}` : mensaje,
+            ip: "127.0.0.1",
+            topicId: topicId || 1,
+            attachments: safeAttachments
+        };
+
+        const data = JSON.stringify(payload);
+
+        try {
+            const u = new URL(OSTICKET_URL);
+            const isHttps = u.protocol === 'https:';
+            const lib = isHttps ? https : http;
+
+            const options = {
+                hostname: u.hostname,
+                port: u.port || (isHttps ? 443 : 80),
+                path: u.pathname + u.search,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-API-Key': OSTICKET_API_KEY,
+                    'Content-Length': Buffer.byteLength(data)
+                }
+            };
+
+            const req = lib.request(options, (res) => {
+                let body = '';
+                res.on('data', (c) => body += c);
+                res.on('end', () => {
+                    if (res.statusCode === 201 || res.statusCode === 200) {
+                        let parsed = null;
+                        try { parsed = JSON.parse(body); } catch (_) { }
+
+                        const ticketFromJson =
+                            parsed?.ticket?.number ||
+                            parsed?.number ||
+                            parsed?.ticket_number ||
+                            parsed?.id ||
+                            null;
+
+                        const ticketFromText = (!ticketFromJson && typeof body === 'string')
+                            ? (body.match(/\b\d{5,}\b/)?.[0] || null)
+                            : null;
+
+                        resolve({
+                            ok: true,
+                            status: res.statusCode,
+                            rawBody: body,
+                            ticket: ticketFromJson || ticketFromText
+                        });
+                    } else {
+                        resolve({ ok: false, statusCode: res.statusCode, body: body });
+                    }
+                });
+            });
+
+            req.on('error', (e) => reject(e));
+            req.write(data);
+            req.end();
+        } catch (urlErr) {
+            reject(urlErr);
+        }
+    });
+}
 
 // (Variables movidas mas abajo)
 
@@ -83,31 +251,7 @@ const OSTICKET_TOPICS = {
 // -------------------------------------------------------------
 /** Helpers */
 // -------------------------------------------------------------
-function ts() {
-    return new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
-}
 
-function onlyDigits(s) {
-    return String(s || '').replace(/\D/g, '');
-}
-
-/**
- * Normaliza a digitos E.164 sin '+'. Si recibe 10 digitos, antepone pais MX (52).
- * Cambia '52' si tu pais base es otro.
- */
-function toE164Digits(raw, defaultCountry = '52') {
-    const digits = onlyDigits(raw);
-    if (!digits) return '';
-    if (digits.startsWith(defaultCountry)) return digits;
-    if (digits.length === 10) return defaultCountry + digits; // nacional MX
-    return digits; // ya trae pais
-}
-
-/** Devuelve ultimos 10 digitos (util para MX local) */
-function last10(raw) {
-    const d = onlyDigits(raw);
-    return d.slice(-10);
-}
 
 /** Helper para extensión de archivo */
 function getExtension(mimetype) {
@@ -124,50 +268,6 @@ function getExtension(mimetype) {
         'text/plain': '.txt'
     };
     return map[mimetype] || '';
-}
-
-
-/** POST JSON (http/https nativo) */
-function postJSON(urlString, data) {
-    return new Promise((resolve, reject) => {
-        try {
-            const u = new URL(urlString);
-            const body = JSON.stringify(data);
-            const isHttps = u.protocol === 'https:';
-            const lib = isHttps ? https : http;
-
-            const options = {
-                hostname: u.hostname,
-                port: u.port || (isHttps ? 443 : 80),
-                path: u.pathname + (u.search || ''),
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Content-Length': Buffer.byteLength(body)
-                },
-                timeout: 10000
-            };
-
-            const req = lib.request(options, (res) => {
-                let chunks = [];
-                res.on('data', (c) => chunks.push(c));
-                res.on('end', () => {
-                    const text = Buffer.concat(chunks).toString('utf8');
-                    resolve({ status: res.statusCode, body: text });
-                });
-            });
-
-            req.on('error', reject);
-            req.on('timeout', () => {
-                req.destroy(new Error('timeout'));
-            });
-
-            req.write(body);
-            req.end();
-        } catch (err) {
-            reject(err);
-        }
-    });
 }
 
 /**
@@ -220,116 +320,6 @@ async function sendToNumber(client, rawNumber, text, opts = {}) {
     }
 }
 
-function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attachments = [] }) {
-    return new Promise((resolve, reject) => {
-
-        const safeAttachments = (attachments || []).map(a => {
-
-            let data = a.data;
-            let type = a.type;
-            let name = a.name;
-
-            // Si viene en formato data:image/jpeg;base64,...
-            if (typeof data === 'string' && data.includes('base64,')) {
-                data = data.split('base64,')[1];
-            }
-
-            // 🔥 Detectar tipo si no viene definido
-            if (!type || type === 'application/octet-stream') {
-                if (name.endsWith('.jpg') || name.endsWith('.jpeg')) {
-                    type = 'image/jpeg';
-                } else if (name.endsWith('.png')) {
-                    type = 'image/png';
-                } else if (name.endsWith('.pdf')) {
-                    type = 'application/pdf';
-                } else if (name.endsWith('.doc')) {
-                    type = 'application/msword';
-                } else if (name.endsWith('.docx')) {
-                    type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-                }
-            }
-
-            return {
-                name: name,
-                data: data,
-                type: type
-            };
-        });
-
-        const payload = {
-            name: nombre,
-            email: email,
-            subject: `Soporte WhatsApp - ${telefono}`,
-            message: `📱 WhatsApp: ${telefono}\n\n${mensaje}`,
-            ip: "127.0.0.1",
-            topicId: topicId || 1,
-            attachments: safeAttachments
-        };
-
-        const data = JSON.stringify(payload);
-
-        const u = new URL(OSTICKET_URL);
-        const isHttps = u.protocol === 'https:';
-        const lib = isHttps ? https : http;
-
-        const options = {
-            hostname: u.hostname,
-            port: u.port || (isHttps ? 443 : 80),
-            path: u.pathname + u.search,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'X-API-Key': OSTICKET_API_KEY,
-                'Content-Length': Buffer.byteLength(data)
-            }
-        };
-
-        console.log('--- osTicket REQUEST ---');
-        console.log('URL:', u.toString());
-
-        const req = lib.request(options, (res) => {
-            let body = '';
-            res.on('data', (c) => body += c);
-            res.on('end', () => {
-                console.log('--- osTicket RESPONSE ---');
-                console.log('STATUS:', res.statusCode);
-                console.log('HEADERS:', res.headers);
-                console.log('BODY:', body);
-
-                if (res.statusCode === 201 || res.statusCode === 200) {
-                    let parsed = null;
-                    try { parsed = JSON.parse(body); } catch (_) { }
-
-                    const ticketFromJson =
-                        parsed?.ticket?.number ||
-                        parsed?.number ||
-                        parsed?.ticket_number ||
-                        parsed?.id ||
-                        null;
-
-                    const ticketFromText = (!ticketFromJson && typeof body === 'string')
-                        ? (body.match(/\b\d{5,}\b/)?.[0] || null)
-                        : null;
-
-                    resolve({
-                        status: res.statusCode,
-                        headers: res.headers,
-                        rawBody: body,
-                        json: parsed,
-                        ticket: ticketFromJson || ticketFromText
-                    });
-                } else {
-                    reject(new Error(`osTicket respondió ${res.statusCode}: ${body}`));
-                }
-            });
-        });
-
-        req.on('error', (err) => reject(err));
-        req.write(data);
-        req.end();
-    });
-}
 
 async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, archivoPath = null) {
     // Traer datos del contacto (incluye tipo_usuario)
@@ -503,6 +493,31 @@ client.on('message', async (msg) => {
 
     console.log(`[${ts()}] Mensaje recibido de ${usuario}`);
 
+    // --- CONTROL DE ACCESO (Abierto / Cerrado) ---
+    const botMode = (process.env.BOT_MODE || 'ABIERTO').toUpperCase();
+    let queryUser = await conexion.query(
+        'SELECT nombre, tipo_usuario FROM contactos WHERE telefono = ?',
+        [telefono]
+    );
+
+    if (queryUser.length === 0) {
+        if (botMode === 'CERRADO') {
+            console.log(`[${ts()}] Acceso CERRADO: Ignorando a ${telefono}`);
+            return;
+        } else {
+            console.log(`[${ts()}] Acceso ABIERTO: Registrando invitado ${telefono}`);
+            await conexion.query(
+                `INSERT INTO contactos (telefono, nombre, tipo_usuario, fecha_registro, ultima_conversacion) 
+                 VALUES (?, 'Invitado', 'invitado', NOW(), NOW())`,
+                [telefono]
+            );
+            // Refrescar datos
+            queryUser = [{ nombre: 'Invitado', tipo_usuario: 'invitado' }];
+        }
+    }
+    const datosUsuarioDB = queryUser[0];
+    // ----------------------------------------------
+
     // Helper: intenta extraer el ID del ticket sin importar el tipo de respuesta
     const extraerTicketId = (respuestaOsTicket) => {
         if (typeof respuestaOsTicket === 'string') {
@@ -527,12 +542,7 @@ client.on('message', async (msg) => {
     try {
         // 1. Comando universal 'menu'
         if (normalizado === 'menu') {
-            const resultados = await conexion.query(
-                'SELECT nombre, tipo_usuario FROM contactos WHERE telefono = ?',
-                [telefono]
-            );
-
-            if (resultados.length === 0 || resultados[0].tipo_usuario === 'invitado') {
+            if (datosUsuarioDB.tipo_usuario === 'invitado') {
                 estadosUsuario[usuario] = 'SELECCION_INGRESO';
                 await msg.reply(
                     'Hola 👋\nNo te encuentras registrado en nuestra base de datos.\n\n' +
@@ -542,7 +552,7 @@ client.on('message', async (msg) => {
                 );
                 return;
             } else {
-                const nombre = resultados[0].nombre;
+                const nombre = datosUsuarioDB.nombre;
                 estadosUsuario[usuario] = 'MENU_PRINCIPAL';
                 await msg.reply(
                     `Hola *${nombre}* con el número *${telefono}*, es un gusto verte de nuevo.\n` +
@@ -839,6 +849,9 @@ client.on('message', async (msg) => {
                 if (msg.hasMedia) {
                     try {
                         const media = await msg.downloadMedia();
+                        console.log('MIME:', media?.mimetype);
+                        console.log('FILENAME:', media?.filename);
+                        console.log('DATA LENGTH:', media?.data?.length);
                         if (media && media.data) {
 
                             // ✅ NUEVO: Forzar nombre y extensión reales (evita que quede "name" y se baje como TXT)
@@ -944,7 +957,110 @@ client.on('message', async (msg) => {
 process.on('unhandledRejection', (r) => console.error(`[${ts()}] unhandledRejection:`, r));
 process.on('uncaughtException', (e) => console.error(`[${ts()}] uncaughtException:`, e));
 
-client.initialize();
+// --- CLASE EMAIL (Integrada) ---
+class Email {
+    constructor() {
+        const user = (process.env.IMAP_USER || '').trim();
+        const pass = (process.env.IMAP_PASS || '').trim();
+        const host = (process.env.IMAP_HOST || '').trim();
+        const port = parseInt(process.env.IMAP_PORT || '993');
+        const secure = process.env.IMAP_SECURE === 'true';
+
+        this.client = new ImapFlow({
+            host,
+            port,
+            secure,
+            auth: {
+                user,
+                pass
+            },
+            logger: false
+        });
+
+        this.isPolling = false;
+        this.interval = parseInt(process.env.EMAIL_POLLING_INTERVAL || '60000');
+        this.topicIdGeneral = parseInt(process.env.OSTICKET_GENERAL_TOPIC_ID || '1');
+    }
+
+    async start() {
+        console.log(`[${ts()}] Email | Servicio iniciado correctamente.`);
+        this.poll();
+        setInterval(() => this.poll(), this.interval);
+    }
+
+    async poll() {
+        if (this.isPolling) return;
+        this.isPolling = true;
+
+        try {
+            await this.client.connect();
+            let lock = await this.client.getMailboxLock('INBOX');
+
+            try {
+                for await (let message of this.client.fetch({ seen: false }, { source: true })) {
+                    try {
+                        let parsed = await simpleParser(message.source);
+                        const fromEmail = (parsed.from?.value?.[0]?.address || '').toLowerCase();
+                        const subject = parsed.subject || '(Sin asunto)';
+                        const body = parsed.text || parsed.html || "(Sin contenido)";
+
+                        console.log(`[${ts()}] Email | Nuevo correo de: ${fromEmail} | Asunto: ${subject}`);
+
+                        const usuarios = await conexion.query(
+                            'SELECT nombre, email FROM contactos WHERE email = ?',
+                            [fromEmail]
+                        );
+
+                        if (usuarios.length === 0) {
+                            console.log(`[${ts()}] Email | Remitente ${fromEmail} NO autorizado en DB. Ignorando.`);
+                            continue;
+                        }
+
+                        const usuario = usuarios[0];
+                        console.log(`[${ts()}] Email | Usuario validado: ${usuario.nombre}. Creando ticket...`);
+
+                        const attachments = (parsed.attachments || []).map(att => ({
+                            name: att.filename,
+                            data: att.content.toString('base64'),
+                            type: att.contentType
+                        }));
+
+                        const res = await crearTicketOsTicket({
+                            nombre: usuario.nombre,
+                            email: usuario.email,
+                            mensaje: `--- Ticket recibido vía Correo ---\nAsunto: ${subject}\n\n${body}`,
+                            topicId: this.topicIdGeneral,
+                            attachments
+                        });
+
+                        if (res.ok) {
+                            console.log(`[${ts()}] Email | Ticket creado exitosamente: ${res.ticket}`);
+                        } else {
+                            console.error(`[${ts()}] Email | Error al crear ticket en osTicket: ${res.body}`);
+                        }
+
+                    } catch (msgErr) {
+                        console.error(`[${ts()}] Email | Error procesando mensaje:`, msgErr);
+                    }
+                }
+            } finally {
+                if (lock) lock.release();
+            }
+            await this.client.logout();
+        } catch (err) {
+            if (err.message && !err.message.includes('Command failed')) {
+                console.error(`[${ts()}] Email | Error en poll:`, err.message);
+            }
+            try { await this.client.logout(); } catch (_) { }
+        } finally {
+            this.isPolling = false;
+        }
+    }
+}
+
+// ✅ Iniciar el servicio de Email de forma independiente
+const emailService = new Email();
+emailService.start();
 
 // -------------------------------------------------------------
 /** Servidor HTTP */
