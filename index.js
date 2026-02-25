@@ -22,6 +22,7 @@ const {
 const conexion = require('./conexion');
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
+const nodemailer = require('nodemailer');
 
 function ts() {
     return new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
@@ -225,7 +226,8 @@ const port = process.env.PUERTO || 8083;
 const numeroInicio = "5215511223344@c.us"; // Numero que recibe aviso cuando arranca el servicio
 const numeroInicio2 = "";
 // const url_notificacion = "http://localhost:5245/api/Whatsapp/Respuesta";
-const url_notificacion = "http://localhost:3000/webhook/whatsapp";
+// const url_notificacion = "http://localhost:3000/webhook/whatsapp";
+const url_notificacion = null;
 
 // -------------------------------------------------------------
 // VARIABLES GLOBALES EN MEMORIA
@@ -405,6 +407,20 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
          VALUES (?, ?, ?, ?, ?, ?, NOW())`,
         [telefono, nombre, email, mensajeCompleto, idTicketCreado, tipoUsuario]
     );
+
+    // ✅ Notificar al Admin por correo (Aviso de nuevo ticket)
+    if (idTicketCreado) {
+        try {
+            await emailService.enviarNotificacionAdmin({
+                cliente: nombre,
+                emailCliente: email,
+                ticketId: idTicketCreado,
+                fuente: 'WhatsApp'
+            });
+        } catch (mailErr) {
+            console.error(`[${ts()}] Error enviando aviso al admin:`, mailErr.message);
+        }
+    }
 
     estadosUsuario[usuario] = 'POST_TICKET';
 
@@ -663,14 +679,33 @@ client.on('message', async (msg) => {
         if (estado === 'MENU_SOPORTE') {
             switch (normalizado) {
                 case '1':
-                    estadosUsuario[usuario] = 'SELECCIONAR_TEMA';
                     {
-                        let msgTemas = '📂 *Selecciona un Tema de Ayuda:*\n';
-                        for (const [key, val] of Object.entries(OSTICKET_TOPICS)) {
-                            msgTemas += `${key}. ${val}\n`;
+                        const contacto = await conexion.query(
+                            'SELECT email FROM contactos WHERE telefono = ?',
+                            [telefono]
+                        );
+                        const email = contacto[0]?.email;
+
+                        if (!email) {
+                            esperandoEmail[usuario] = true;
+                            delete estadosUsuario[usuario];
+
+                            await msg.reply(
+                                '📧 Para continuar, necesito tu *correo electrónico*.\n' +
+                                'Por favor escríbelo (ej: nombre@dominio.com) o escribe *0* para cancelar.'
+                            );
+                        } else {
+                            estadosUsuario[usuario] = 'CREANDO_TICKET';
+                            bufferTicket = bufferTicket || {};
+                            bufferTicket[usuario] = [];
+
+                            await msg.reply(
+                                '📝 *Describe tu problema para crear el ticket.*\n' +
+                                'Puedes enviar varios mensajes.\n' +
+                                'Cuando termines, escribe la palabra *FIN*.\n\n' +
+                                'Escribe *0* o *menu* para cancelar.'
+                            );
                         }
-                        msgTemas += '\n0. Volver al menú';
-                        await msg.reply(msgTemas);
                     }
                     break;
 
@@ -712,50 +747,6 @@ client.on('message', async (msg) => {
             return;
         }
 
-        // ✅ 1. Selección de Tema
-        if (estado === 'SELECCIONAR_TEMA') {
-            if (OSTICKET_TOPICS[normalizado]) {
-                memoriaUsuarios[usuario] = {
-                    ...memoriaUsuarios[usuario],
-                    topicId: normalizado,
-                    topicName: OSTICKET_TOPICS[normalizado]
-                };
-
-                const contacto = await conexion.query(
-                    'SELECT email FROM contactos WHERE telefono = ?',
-                    [telefono]
-                );
-                const email = contacto[0]?.email;
-
-                if (!email) {
-                    esperandoEmail[usuario] = true;
-                    delete estadosUsuario[usuario];
-
-                    await msg.reply(
-                        '📧 Para continuar, necesito tu *correo electrónico*.\n' +
-                        'Por favor escríbelo (ej: nombre@dominio.com) o escribe *0* para cancelar.'
-                    );
-                } else {
-                    estadosUsuario[usuario] = 'CREANDO_TICKET';
-                    bufferTicket[usuario] = [];
-
-                    await msg.reply(
-                        '✅ Tema: *' + OSTICKET_TOPICS[normalizado] + '*\n\n' +
-                        '📝 *Describe tu problema para crear el ticket.*\n' +
-                        'Puedes enviar varios mensajes.\n' +
-                        'Cuando termines, escribe la palabra *FIN*.\n\n' +
-                        'Escribe *0* o *menu* para cancelar.'
-                    );
-                }
-
-            } else if (normalizado === '0' || normalizado === 'menu') {
-                estadosUsuario[usuario] = 'MENU_SOPORTE';
-                await msg.reply(menuSoporte());
-            } else {
-                await msg.reply('⚠️ Elige una opción válida de la lista.');
-            }
-            return;
-        }
 
         if (estado === 'CREANDO_TICKET') {
 
@@ -960,26 +951,26 @@ process.on('uncaughtException', (e) => console.error(`[${ts()}] uncaughtExceptio
 // --- CLASE EMAIL (Integrada) ---
 class Email {
     constructor() {
+        this.isPolling = false;
+        this.client = null;
+        this.interval = parseInt(process.env.EMAIL_POLLING_INTERVAL || '60000');
+        this.topicIdGeneral = parseInt(process.env.OSTICKET_GENERAL_TOPIC_ID || '1');
+    }
+
+    crearCliente() {
         const user = (process.env.IMAP_USER || '').trim();
         const pass = (process.env.IMAP_PASS || '').trim();
         const host = (process.env.IMAP_HOST || '').trim();
         const port = parseInt(process.env.IMAP_PORT || '993');
         const secure = process.env.IMAP_SECURE === 'true';
 
-        this.client = new ImapFlow({
+        return new ImapFlow({
             host,
             port,
             secure,
-            auth: {
-                user,
-                pass
-            },
+            auth: { user, pass },
             logger: false
         });
-
-        this.isPolling = false;
-        this.interval = parseInt(process.env.EMAIL_POLLING_INTERVAL || '60000');
-        this.topicIdGeneral = parseInt(process.env.OSTICKET_GENERAL_TOPIC_ID || '1');
     }
 
     async start() {
@@ -993,37 +984,41 @@ class Email {
         this.isPolling = true;
 
         try {
+            // Recrear cliente si no existe o fue destruido por error previo
+            if (!this.client || this.client.destroyed) {
+                this.client = this.crearCliente();
+            }
+
             await this.client.connect();
             let lock = await this.client.getMailboxLock('INBOX');
 
             try {
                 for await (let message of this.client.fetch({ seen: false }, { source: true })) {
                     try {
+                        // ✅ Marcar inmediatamente como leido para no repetir en el proximo poll
+                        await this.client.messageFlagsAdd(message.uid, ['\\Seen'], { uid: true });
+
                         let parsed = await simpleParser(message.source);
                         const fromEmail = (parsed.from?.value?.[0]?.address || '').toLowerCase();
                         const subject = parsed.subject || '(Sin asunto)';
                         const body = parsed.text || parsed.html || "(Sin contenido)";
-
-                        console.log(`[${ts()}] Email | Nuevo correo de: ${fromEmail} | Asunto: ${subject}`);
-
-                        const usuarios = await conexion.query(
-                            'SELECT nombre, email FROM contactos WHERE email = ?',
-                            [fromEmail]
-                        );
-
-                        if (usuarios.length === 0) {
-                            console.log(`[${ts()}] Email | Remitente ${fromEmail} NO autorizado en DB. Ignorando.`);
-                            continue;
-                        }
-
-                        const usuario = usuarios[0];
-                        console.log(`[${ts()}] Email | Usuario validado: ${usuario.nombre}. Creando ticket...`);
 
                         const attachments = (parsed.attachments || []).map(att => ({
                             name: att.filename,
                             data: att.content.toString('base64'),
                             type: att.contentType
                         }));
+
+                        // --- CREACIÓN DIRECTA ---
+                        const usuarios = await conexion.query(
+                            'SELECT nombre, email FROM contactos WHERE email = ?',
+                            [fromEmail]
+                        );
+
+                        if (usuarios.length === 0) continue;
+
+                        const usuario = usuarios[0];
+                        console.log(`[${ts()}] Email | Nuevo correo de cliente: ${usuario.nombre}. Creando ticket...`);
 
                         const res = await crearTicketOsTicket({
                             nombre: usuario.nombre,
@@ -1035,32 +1030,93 @@ class Email {
 
                         if (res.ok) {
                             console.log(`[${ts()}] Email | Ticket creado exitosamente: ${res.ticket}`);
-                        } else {
-                            console.error(`[${ts()}] Email | Error al crear ticket en osTicket: ${res.body}`);
+                            await this.enviarNotificacionAdmin({
+                                cliente: usuario.nombre,
+                                emailCliente: fromEmail,
+                                ticketId: res.ticket,
+                                fuente: 'Correo'
+                            });
                         }
-
                     } catch (msgErr) {
                         console.error(`[${ts()}] Email | Error procesando mensaje:`, msgErr);
                     }
                 }
             } finally {
                 if (lock) lock.release();
+                await this.client.logout();
             }
-            await this.client.logout();
         } catch (err) {
-            if (err.message && !err.message.includes('Command failed')) {
-                console.error(`[${ts()}] Email | Error en poll:`, err.message);
+            console.error(`[${ts()}] Email | Error en poll:`, err.message);
+            // Destruir cliente para forzar recreación en el próximo ciclo
+            if (this.client) {
+                try {
+                    await this.client.logout();
+                } catch (_) { }
+                this.client = null;
             }
-            try { await this.client.logout(); } catch (_) { }
         } finally {
             this.isPolling = false;
         }
     }
+
+    async enviarNotificacionAdmin({ cliente, emailCliente, ticketId, fuente }) {
+        try {
+            const transporter = nodemailer.createTransport({
+                host: process.env.SMTP_HOST,
+                port: parseInt(process.env.SMTP_PORT || '465'),
+                secure: process.env.SMTP_SECURE === 'true',
+                auth: {
+                    user: process.env.SMTP_USER,
+                    pass: process.env.SMTP_PASS
+                }
+            });
+
+            // Construir enlace SCP (ajustar segun instalacion)
+            const baseUrl = (process.env.OSTICKET_URL || '').split('/api/')[0];
+            const link = `${baseUrl}/scp/tickets.php?a=search&query=${ticketId}`;
+
+            await transporter.sendMail({
+                from: `"Bot Soporte" <${process.env.SMTP_USER}>`,
+                to: process.env.ADMIN_EMAIL,
+                subject: `Nuevo Ticket [${ticketId}] - ${cliente}`,
+                text: `Se ha creado un nuevo ticket.\n\n` +
+                    `Cliente: ${cliente}\n` +
+                    `Email: ${emailCliente}\n` +
+                    `Fuente: ${fuente}\n` +
+                    `Ticket ID: ${ticketId}\n\n` +
+                    `Puedes revisarlo y asignarlo aquí:\n${link}`
+            });
+            console.log(`[${ts()}] Email | Notificación enviada al admin para el ticket: ${ticketId}`);
+        } catch (err) {
+            console.error(`[${ts()}] Email | Error enviando notificación al admin:`, err.message);
+        }
+    }
 }
 
-// ✅ Iniciar el servicio de Email de forma independiente
+// Inicializar Email y WhatsApp
 const emailService = new Email();
 emailService.start();
+
+// Limpiar bloqueos de sesión antes de iniciar
+const path = require('path');
+const lockPath = path.join(__dirname, '.wwebjs_auth', 'session-bot-whatsapp', 'SingletonLock');
+if (fs.existsSync(lockPath)) { try { fs.unlinkSync(lockPath); } catch (_) { } }
+
+client.initialize().catch(err => {
+    if (!err.message.includes('browser is already running')) {
+        console.error(`[${ts()}] WhatsApp | Error al inicializar:`, err.message);
+    }
+});
+
+// Captura global para evitar logs de errores conocidos
+process.on('unhandledRejection', (reason) => {
+    const msg = reason?.message || String(reason);
+    if (msg.includes('browser is already running')) {
+        // Silencio absoluto como pidió el usuario
+        return;
+    }
+    console.error(`[${ts()}] unhandledRejection:`, reason);
+});
 
 // -------------------------------------------------------------
 /** Servidor HTTP */
@@ -1143,6 +1199,14 @@ const server = http.createServer(async (req, res) => {
         console.log(`[${ts()}] error_interno:`, err?.message || err);
         res.statusCode = 500;
         return res.end(JSON.stringify({ ok: false, message: 'error_interno' }));
+    }
+});
+
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.log(`[${ts()}] Servidor | El puerto ${port} está ocupado. Ignorando aviso...`);
+    } else {
+        console.error(`[${ts()}] Servidor | Error:`, err);
     }
 });
 
