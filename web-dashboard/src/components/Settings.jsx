@@ -37,7 +37,7 @@ const Settings = () => {
     }
   };
 
-  if (loading) return <div style={{ color: '#fff', padding: '20px' }}>Cargando configuración...</div>;
+  if (loading) return <div style={{ color: 'var(--text-primary)', padding: '20px' }}>Cargando configuración...</div>;
 
   return (
     <div style={{ animation: 'fadeIn 0.4s ease' }}>
@@ -49,7 +49,7 @@ const Settings = () => {
       <div className="glass-panel" style={{ padding: '32px', maxWidth: '600px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '24px', borderRadius: '16px', background: isMaintenance ? 'rgba(239, 68, 68, 0.1)' : 'rgba(255, 255, 255, 0.03)', border: `1px solid ${isMaintenance ? 'rgba(239, 68, 68, 0.2)' : 'var(--glass-border)'}`, transition: 'all 0.3s ease' }}>
           <div style={{ flex: 1 }}>
-            <h3 style={{ margin: 0, color: isMaintenance ? '#ef4444' : '#fff', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <h3 style={{ margin: 0, color: isMaintenance ? '#ef4444' : 'var(--text-primary)', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span>🛠️</span> Modo Mantenimiento
             </h3>
             <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
@@ -80,7 +80,7 @@ const Settings = () => {
               width: '24px',
               height: '24px',
               borderRadius: '50%',
-              background: '#fff',
+              background: 'var(--text-primary)',
               boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
               transition: 'left 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
             }}></div>

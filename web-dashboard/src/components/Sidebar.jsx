@@ -1,15 +1,16 @@
 import React from 'react';
+import brandLogo from '../assets/images/images.png';
 
 const Sidebar = ({ activeTab, onNavigate }) => {
   return (
     <aside className="glass-panel" style={{ width: '280px', display: 'flex', flexDirection: 'column', padding: '24px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '40px' }}>
-        <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'var(--accent-teal)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span style={{ color: '#fff', fontWeight: 'bold' }}>W</span>
+        <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '6px', boxShadow: '0 4px 12px rgba(255,255,255,0.05)' }}>
+          <img src={brandLogo} alt="Centro de Soporte" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         </div>
         <div>
-          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#fff' }}>Helpdesk Bot</h2>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Welcome, Admin</p>
+          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)' }}>Panel Operativo</h2>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Admin Control</p>
         </div>
       </div>
 
@@ -58,7 +59,7 @@ const NavItem = ({ active, label, icon, onClick }) => {
         padding: '12px 16px',
         borderRadius: '8px',
         textDecoration: 'none',
-        color: active ? '#fff' : 'var(--text-secondary)',
+        color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
         background: active ? 'linear-gradient(90deg, rgba(45, 212, 191, 0.15), transparent)' : 'transparent',
         borderLeft: active ? '3px solid var(--accent-teal)' : '3px solid transparent',
         transition: 'all 0.2s',

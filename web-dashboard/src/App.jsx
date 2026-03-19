@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Sidebar from './components/Sidebar'
 import TicketTable from './components/TicketTable'
 import TicketDetailModal from './components/TicketDetailModal'
@@ -11,6 +11,14 @@ function App() {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isMaintenance, setIsMaintenance] = useState(false);
+  const previousTicketsRef = useRef([]);
+
+  // Solicitar permisos para Notificaciones Nativas del Navegador
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+      Notification.requestPermission();
+    }
+  }, []);
 
   // Pool maintenance status and tickets
   useEffect(() => {
@@ -21,12 +29,32 @@ function App() {
           setLoading(true);
           const resT = await fetch('http://127.0.0.1:8083/api/tickets');
           const dataT = await resT.json();
-          if (dataT.ok) setTickets(dataT.tickets.map(t => ({
-            ...t,
-            id: `#${t.externalId || t.id}`,
-            status: t.externalId ? 'open' : 'pending', // Logic assumption
-            priority: 'Medium'
-          })));
+          if (dataT.ok) {
+            const parsedTickets = dataT.tickets.map(t => ({
+              ...t,
+              id: `#${t.externalId || t.id}`,
+              status: t.externalId ? 'open' : 'pending', // Logic assumption
+              priority: 'Medium'
+            }));
+
+            // Comparar tickets anteriores vs nuevos para lanzar notificación nativa Desktop
+            if (previousTicketsRef.current.length > 0 && parsedTickets.length > 0) {
+              const prevIds = new Set(previousTicketsRef.current.map(t => t.id));
+              const newArrivals = parsedTickets.filter(t => !prevIds.has(t.id));
+
+              if (newArrivals.length > 0 && 'Notification' in window && Notification.permission === 'granted') {
+                newArrivals.forEach(t => {
+                  new Notification(`🔔 Nuevo Ticket: ${t.id}`, {
+                    body: `Cliente: ${t.customer}\nAsunto: ${t.subject}`,
+                    icon: '/vite.svg'
+                  });
+                });
+              }
+            }
+
+            previousTicketsRef.current = parsedTickets;
+            setTickets(parsedTickets);
+          }
           setLoading(false);
         }
 
@@ -63,7 +91,7 @@ function App() {
         {isMaintenance && (
           <div style={{ 
             background: 'rgba(239, 68, 68, 0.9)', 
-            color: '#fff', 
+            color: 'var(--text-primary)', 
             padding: '10px 24px', 
             borderRadius: '8px', 
             marginBottom: '24px', 

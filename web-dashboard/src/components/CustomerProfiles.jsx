@@ -64,7 +64,7 @@ const CustomerProfiles = () => {
                 borderRadius: '8px',
                 background: 'rgba(0,0,0,0.2)',
                 border: '1px solid var(--glass-border)',
-                color: '#fff',
+                color: 'var(--text-primary)',
                 fontSize: '0.9rem',
                 outline: 'none'
               }}
@@ -89,7 +89,7 @@ const CustomerProfiles = () => {
                 onMouseEnter={e => { if (selectedCustomer?.telefono !== customer.telefono) e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
                 onMouseLeave={e => { if (selectedCustomer?.telefono !== customer.telefono) e.currentTarget.style.background = 'transparent' }}
               >
-                <div style={{ fontWeight: 600, color: '#fff', marginBottom: '4px' }}>{customer.nombre || 'Desconocido'}</div>
+                <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>{customer.nombre || 'Desconocido'}</div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>
                   <span>{customer.telefono}</span>
                   <span style={{ color: 'var(--accent-teal)' }}>{customer.total_tickets} tickets</span>
@@ -106,7 +106,7 @@ const CustomerProfiles = () => {
               <div style={{ padding: '32px', borderBottom: '1px solid var(--glass-border)', background: 'rgba(255,255,255,0.01)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <h2 style={{ fontSize: '1.8rem', margin: '0 0 8px 0', color: '#fff' }}>{selectedCustomer.nombre}</h2>
+                    <h2 style={{ fontSize: '1.8rem', margin: '0 0 8px 0', color: 'var(--text-primary)' }}>{selectedCustomer.nombre}</h2>
                     <p style={{ color: 'var(--text-secondary)', margin: 0 }}>{selectedCustomer.email || 'Sin correo registrado'}</p>
                     <p style={{ color: 'var(--accent-teal)', margin: '8px 0 0 0', fontSize: '0.9rem' }}>📞 {selectedCustomer.telefono}</p>
                   </div>
@@ -118,7 +118,7 @@ const CustomerProfiles = () => {
               </div>
 
               <div style={{ flex: 1, overflowY: 'auto', padding: '32px' }}>
-                <h3 style={{ fontSize: '1.1rem', color: '#fff', marginBottom: '24px' }}>Línea de Tiempo del Cliente</h3>
+                <h3 style={{ fontSize: '1.1rem', color: 'var(--text-primary)', marginBottom: '24px' }}>Línea de Tiempo del Cliente</h3>
                 
                 {loadingHistory ? (
                   <div style={{ color: 'var(--text-secondary)' }}>Consultando historial...</div>

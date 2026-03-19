@@ -44,6 +44,25 @@ function toE164Digits(raw, defaultCountry = '52') {
     return digits; // ya trae pais
 }
 
+/**
+ * Normaliza números de México para manejar la inconsistencia del '1' (52 vs 521).
+ * Devuelve un array con las dos posibles variantes para búsqueda en DB.
+ */
+function obtenerVariantesMX(telefono) {
+    const tel = onlyDigits(telefono);
+    if (!tel.startsWith('52')) return [tel];
+    
+    // Si tiene 13 dígitos y empieza con 521, generar la versión de 12 (sin el 1)
+    if (tel.length === 13 && tel.startsWith('521')) {
+        return [tel, '52' + tel.substring(3)];
+    }
+    // Si tiene 12 dígitos y empieza con 52, generar la versión de 13 (con el 1)
+    if (tel.length === 12 && tel.startsWith('52')) {
+        return [tel, '521' + tel.substring(2)];
+    }
+    return [tel];
+}
+
 /** Devuelve ultimos 10 digitos (util para MX local) */
 function last10(raw) {
     const d = onlyDigits(raw);
@@ -494,13 +513,21 @@ async function onClientReady() {
 // Listo
 client.on('ready', onClientReady);
 
-client.on('message', async (msg) => {
+client.on('message_create', async (msg) => {
+    // START EARLY DEBUG
+    // console.log(`[EARLY DEBUG] from: ${msg.from}, type: ${msg.type}, hasMedia: ${msg.hasMedia}, body: "${msg.body}"`);
+    // END EARLY DEBUG
 
     if (msg.from === 'status@broadcast' || msg.to === 'status@broadcast') return;
     if (msg.fromMe) return;
-    if (!msg.from.endsWith('@c.us')) return;
+    // Ignorar Grupos (@g.us) y Newsletters (@newsletter)
+    if (msg.from.endsWith('@g.us') || msg.from.includes('@newsletter')) return;
 
-    const textoOriginal = (msg.body || '').trim();
+    let bodyText = msg.body;
+    if (!bodyText && msg._data) {
+        bodyText = msg._data.body || msg._data.caption || msg._data.content || '';
+    }
+    const textoOriginal = (bodyText || '').trim();
 
     // Normalización: minúsculas y sin acentos
     const normalizado = textoOriginal
@@ -509,9 +536,11 @@ client.on('message', async (msg) => {
         .replace(/[\u0300-\u036f]/g, '');
 
     const usuario = msg.from;
-    const telefono = usuario.replace('@c.us', '');
+    const telefonoOriginalFull = usuario.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '');
+    const variantes = obtenerVariantesMX(telefonoOriginalFull);
+    const telefono = variantes[0]; // Usamos la principal para registros nuevos
 
-    console.log(`[DEBUG] RAW: "${textoOriginal}" | NORM: "${normalizado}" | ESTADO: ${estadosUsuario[usuario]}`);
+    console.log(`[DEBUG] RAW: "${textoOriginal}" | NORM: "${normalizado}" | ESTADO: ${estadosUsuario[usuario]} | VAR: ${variantes.join(',')}`);
     console.log(`[${ts()}] Mensaje recibido de ${usuario}`);
 
     // --- CONTROL DE MANTENIMIENTO ---
@@ -523,24 +552,41 @@ client.on('message', async (msg) => {
 
     // --- CONTROL DE ACCESO (Abierto / Cerrado) ---
     const botMode = (process.env.BOT_MODE || 'ABIERTO').toUpperCase();
-    let queryUser = (await conexion.query(
-        'SELECT nombre, tipo_usuario FROM contactos WHERE telefono = ?',
-        [telefono]
-    )) || [];
+    
+    // Búsqueda dual para México
+    let queryUser = [];
+    if (variantes.length > 1) {
+        const rows = await conexion.query(
+            'SELECT nombre, tipo_usuario, email FROM contactos WHERE telefono IN (?, ?)',
+            [variantes[0], variantes[1]]
+        );
+        queryUser = rows;
+    } else {
+        const rows = await conexion.query(
+            'SELECT nombre, tipo_usuario, email FROM contactos WHERE telefono = ?',
+            [telefono]
+        );
+        queryUser = rows;
+    }
 
-    if (queryUser.length === 0) {
+    if (!queryUser || queryUser.length === 0) {
         if (botMode === 'CERRADO') {
             console.log(`[${ts()}] Acceso CERRADO: Ignorando a ${telefono}`);
             return;
         } else {
-            console.log(`[${ts()}] Acceso ABIERTO: Registrando invitado ${telefono}`);
-            await conexion.query(
-                `INSERT INTO contactos (telefono, nombre, tipo_usuario, fecha_registro, ultima_conversacion) 
-                 VALUES (?, 'Invitado', 'invitado', NOW(), NOW())`,
-                [telefono]
-            );
-            // Refrescar datos
-            queryUser = [{ nombre: 'Invitado', tipo_usuario: 'invitado' }];
+            if (normalizado === 'menu') {
+                console.log(`[${ts()}] Acceso ABIERTO: Registrando invitado ${telefono}`);
+                await conexion.query(
+                    `INSERT INTO contactos (telefono, nombre, tipo_usuario, fecha_registro, ultima_conversacion) 
+                     VALUES (?, 'Invitado', 'invitado', NOW(), NOW())`,
+                    [telefono]
+                );
+                // Refrescar datos
+                queryUser = [{ nombre: 'Invitado', tipo_usuario: 'invitado' }];
+            } else {
+                console.log(`[${ts()}] Acceso ABIERTO: Ignorando a ${telefono} porque no envió la palabra clave "menu".`);
+                return;
+            }
         }
     }
     const datosUsuarioDB = queryUser[0];
@@ -1151,13 +1197,23 @@ class Email {
         const port = parseInt(process.env.IMAP_PORT || '993');
         const secure = process.env.IMAP_SECURE === 'true';
 
-        return new ImapFlow({
+        const client = new ImapFlow({
             host,
             port,
             secure,
             auth: { user, pass },
-            logger: false
+            logger: false,
+            disableAutoIdle: false, // Intentar mantener conexión
+            connectionTimeout: 15000,
+            greetingTimeout: 15000
         });
+
+        // Capturar errores de socket para que no tumben el proceso principal
+        client.on('error', err => {
+            console.error(`[${ts()}] Email | Error de Socket/Conexión:`, err.message);
+        });
+
+        return client;
     }
 
     async start() {
@@ -1299,18 +1355,34 @@ class Email {
             const baseUrl = (process.env.OSTICKET_URL || '').split('/api/')[0];
             const link = `${baseUrl}/scp/tickets.php?a=search&query=${ticketId}`;
 
-            await transporter.sendMail({
-                from: `"Bot Soporte" <${process.env.SMTP_USER}>`,
-                to: process.env.ADMIN_EMAIL,
-                subject: `Nuevo Ticket [${ticketId}] - ${cliente}`,
-                text: `Se ha creado un nuevo ticket.\n\n` +
-                    `Cliente: ${cliente}\n` +
-                    `Email: ${emailCliente}\n` +
-                    `Fuente: ${fuente}\n` +
-                    `Ticket ID: ${ticketId}\n\n` +
-                    `Puedes revisarlo y asignarlo aquí:\n${link}`
-            });
-            console.log(`[${ts()}] Email | Notificación enviada al admin para el ticket: ${ticketId}`);
+            // Separar y enviar correos individualmente para evitar filtros de SPAM (Hotmail/Outlook)
+            const adminEmails = (process.env.ADMIN_EMAIL || '').split(',').map(e => e.trim()).filter(e => e);
+            
+            let enviadosExito = 0;
+            for (const targetEmail of adminEmails) {
+                try {
+                    await transporter.sendMail({
+                        from: `"Bot Soporte" <${process.env.SMTP_USER}>`,
+                        to: targetEmail,
+                        subject: `Nuevo Ticket [${ticketId}] - ${cliente}`,
+                        text: `Se ha creado un nuevo ticket.\n\n` +
+                            `Cliente: ${cliente}\n` +
+                            `Email: ${emailCliente}\n` +
+                            `Fuente: ${fuente}\n` +
+                            `Ticket ID: ${ticketId}\n\n` +
+                            `Puedes revisarlo y asignarlo aquí:\n${link}`
+                    });
+                    enviadosExito++;
+                } catch (indErr) {
+                    console.error(`[${ts()}] Email | Falló envío individual a ${targetEmail}:`, indErr.message);
+                }
+            }
+            
+            if (enviadosExito > 0) {
+                console.log(`[${ts()}] Email | Notificación enviada exitosamente a ${enviadosExito} admin(s) para el ticket: ${ticketId}`);
+            } else {
+                console.error(`[${ts()}] Email | No se pudo notificar a ningún admin sobre el ticket: ${ticketId}`);
+            }
         } catch (err) {
             console.error(`[${ts()}] Email | Error enviando notificación al admin:`, err.message);
         }
@@ -1417,13 +1489,13 @@ const server = http.createServer(async (req, res) => {
     // 1. Obtener listado de clientes únicos con sus métricas
     if (req.method === 'GET' && req.url === '/api/customers') {
         try {
-            const [rows] = await conexion.query(`
+            const rows = await conexion.query(`
                 SELECT 
                     telefono, 
                     MAX(email) as email,
                     MAX(nombre) as nombre,
                     COUNT(id) as total_tickets,
-                    MAX(fecha_reporte) as ultima_interaccion
+                    MAX(fecha_creacion) as ultima_interaccion
                 FROM tickets_whatsapp 
                 GROUP BY telefono
                 ORDER BY ultima_interaccion DESC
@@ -1439,16 +1511,16 @@ const server = http.createServer(async (req, res) => {
     // 2. Obtener listado de tickets recientes (Mesa de Ayuda)
     if (req.method === 'GET' && req.url === '/api/tickets') {
         try {
-            const [rows] = await conexion.query(`
+            const rows = await conexion.query(`
                 SELECT 
                     id, 
                     nombre as customer, 
-                    mensaje_original as subject, 
-                    fecha_reporte as lastActivity, 
+                    mensaje as subject, 
+                    fecha_creacion as lastActivity, 
                     ticket_id_osticket as externalId,
                     'osTicket' as source
                 FROM tickets_whatsapp 
-                ORDER BY fecha_reporte DESC 
+                ORDER BY fecha_creacion DESC 
                 LIMIT 50
             `);
             res.statusCode = 200;
@@ -1467,11 +1539,11 @@ const server = http.createServer(async (req, res) => {
                 res.statusCode = 400;
                 return res.end(JSON.stringify({ ok: false, message: 'Se requiere ID de cliente' }));
             }
-            const [rows] = await conexion.query(`
-                SELECT id, ticket_id_osticket, fecha_reporte, mensaje_original
+            const rows = await conexion.query(`
+                SELECT id, ticket_id_osticket, fecha_creacion as fecha_reporte, mensaje as mensaje_original
                 FROM tickets_whatsapp
                 WHERE telefono = ?
-                ORDER BY fecha_reporte DESC
+                ORDER BY fecha_creacion DESC
             `, [telefonoId]);
             res.statusCode = 200;
             return res.end(JSON.stringify({ ok: true, history: rows }));
