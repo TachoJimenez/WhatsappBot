@@ -418,9 +418,10 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
     let bodyStr = '';
     if (typeof respuestaOsTicket === 'string') bodyStr = respuestaOsTicket;
     else if (respuestaOsTicket.ticket) bodyStr = String(respuestaOsTicket.ticket);
-    else if (respuestaOsTicket.body) bodyStr = respuestaOsTicket.body;
+    else if (respuestaOsTicket.rawBody) bodyStr = String(respuestaOsTicket.rawBody);
+    else if (respuestaOsTicket.body) bodyStr = String(respuestaOsTicket.body);
 
-    const idTicketCreado = bodyStr.match(/\b\d{5,}\b/)?.[0] || null;
+    const idTicketCreado = bodyStr.match(/\b\d+\b/)?.[0] || 'TICKET-OS';
 
     // ✅ Guardar en tu tabla local tickets_whatsapp
     await conexion.query(
@@ -715,18 +716,22 @@ client.on('message_create', async (msg) => {
         if (estado === 'MENU_PRINCIPAL') {
             switch (normalizado) {
                 case '1':
-                    await msg.reply('📄 *Información general*\nSomos la empresa Tangentes del Norte dedicada al soporte técnico y soluciones digitales.\n\n0 Volver al menú');
+                    await msg.reply('📄 *Información general*\nSomos la empresa Tangentes del Norte dedicada al soporte técnico y soluciones digitales.\n\n💬 Escribe *0* para volver al Menú Principal.');
                     break;
                 case '2':
                     estadosUsuario[usuario] = 'MENU_SOPORTE';
                     await msg.reply(menuSoporte());
                     break;
                 case '3':
-                    await msg.reply('🕒 *Horarios*\nAtendemos de Lunes a Viernes de 9:00 AM a 6:00 PM.');
+                    await msg.reply('🕒 *Horarios*\nAtendemos de Lunes a Viernes de 9:00 AM a 6:00 PM.\n\n💬 Escribe *0* para volver al Menú Principal.');
                     break;
                 case '4':
                     delete estadosUsuario[usuario];
                     await msg.reply('¡Hasta pronto! 👋 Si necesitas algo más, solo escribe *menu*.');
+                    break;
+                case '0':
+                case 'menu':
+                    await msg.reply(menuPrincipal());
                     break;
                 default:
                     await msg.reply('⚠️ Opción inválida.\n\n' + menuPrincipal());
@@ -769,78 +774,30 @@ client.on('message_create', async (msg) => {
 
                 case '2':
                     try {
-                        const emailUsuario = datosUsuarioDB.email || '';
-                        let mantisTickets = [];
-                        let msgList = '📋 *Tus tickets registrados:*\n\n';
-
-                        // 1. Obtener Tickets de osTicket (local)
+                        let msgList = '📋 *Tus últimos tickets registrados:*\n\n';
                         const osTickets = (await conexion.query(
                             'SELECT id, ticket_id_osticket, fecha_creacion, mensaje FROM tickets_whatsapp WHERE telefono = ? ORDER BY id DESC LIMIT 5',
                             [telefono]
                         )) || [];
 
-                        msgList += '🔸 *En osTicket:*\n';
                         if (osTickets.length === 0) {
-                            msgList += '📭 No tienes tickets en osTicket.\n\n';
+                            msgList += '📭 Aún no tienes tickets registrados en nuestro sistema.\n\n';
                         } else {
                             osTickets.forEach(t => {
                                 const idOs = t.ticket_id_osticket || 'Pendiente';
                                 const fecha = new Date(t.fecha_creacion).toLocaleDateString();
                                 const extracto = t.mensaje.substring(0, 30).replace(/\n/g, ' ') + '...';
-                                msgList += `🆔 *${idOs}* (${fecha})\n📝 ${extracto}\n\n`;
+                                msgList += `🆔 *#${idOs}* (${fecha})\n📝 ${extracto}\n\n`;
                             });
                         }
-
-                        // 2. Obtener Tickets de MantisBT (API REST)
-                        msgList += '🔹 *En MantisBT:*\n';
-                        if (!emailUsuario) {
-                            msgList += '⚠️ Requieres registrar tu correo para ver tickets de MantisBT.\n\n';
-                        } else {
-                            try {
-                                const mantisUrl = process.env.MANTISBT_URL;
-                                const mantisKey = process.env.MANTISBT_API_KEY;
-
-                                if (mantisUrl && mantisKey && mantisKey !== 'YOUR_API_KEY_HERE') {
-                                    // Algunas versiones recientes soportan query por email directo, o usando filter_id, 
-                                    // o buscando globalmente si es admin y filtrando post-request.
-                                    // Para MantisBT REST API (suponiendo /issues u otra URL dependiendo la version):
-                                    const respMantis = await axios.get(`${mantisUrl}/issues?page_size=5&filter_id=0`, {
-                                        headers: { 'Authorization': mantisKey }
-                                    });
-
-                                    // Lógica de filtrado manual en caso de que la API regrese todo:
-                                    if (respMantis.data && Array.isArray(respMantis.data.issues)) {
-                                        mantisTickets = respMantis.data.issues.filter(iss => 
-                                            iss.reporter && iss.reporter.email === emailUsuario
-                                        ).slice(0, 5);
-                                    }
-                                }
-
-                                if (mantisTickets.length === 0) {
-                                    msgList += '📭 No tienes tickets recientes en MantisBT.\n\n';
-                                } else {
-                                    mantisTickets.forEach(t => {
-                                        const idMt = t.id;
-                                        const estadoMt = t.status ? t.status.name : 'Desconocido';
-                                        const resumen = t.summary ? t.summary.substring(0, 30) : '';
-                                        msgList += `🆔 *#${idMt}* - ${estadoMt}\n📝 ${resumen}\n\n`;
-                                    });
-                                }
-
-                            } catch (mantisError) {
-                                console.error('Error accediendo a MantisBT API:', mantisError.message);
-                                msgList += '❌ No se pudo conectar con MantisBT en este momento.\n\n';
-                            }
-                        }
-
-                        msgList += 'Escribe el *ID* del ticket que deseas consultar a detalle, o teclea *0* para volver al menú.';
+                        
+                        msgList += 'Escribe el *ID* del ticket que deseas consultar a detalle (ej. #12345), o teclea *0* para volver al menú.';
                         await msg.reply(msgList);
-
+                        estadosUsuario[usuario] = 'ESPERANDO_ID_TICKET';
                     } catch (error) {
                         console.error('Error consultando tickets globales:', error);
                         await msg.reply('❌ Error general consultando tus tickets.');
                     }
-                    estadosUsuario[usuario] = 'ESPERANDO_ID_TICKET';
                     break;
 
                 case '0':
@@ -889,86 +846,8 @@ client.on('message_create', async (msg) => {
                     }
                 } 
                 
-                // 2. LÓGICA PARA MANTISBT (Búsqueda en API REST)
-                if (!encontrado && !isNaN(parseInt(inputId.replace('#', '')))) {
-                    const numId = parseInt(inputId.replace('#', ''));
-                    const mantisUrl = process.env.MANTISBT_URL;
-                    const mantisKey = process.env.MANTISBT_API_KEY;
-
-                    if (mantisUrl && mantisKey && mantisKey !== 'YOUR_API_KEY_HERE') {
-                        try {
-                            const resp = await axios.get(`${mantisUrl}/issues/${numId}`, {
-                                headers: { 'Authorization': mantisKey }
-                            });
-
-                            if (resp.data && resp.data.issues && resp.data.issues.length > 0) {
-                                const issue = resp.data.issues[0];
-                                
-                                // Seguridad: Verificar que el ticket le pertenezca al usuario (por correo)
-                                const reporterEmail = issue.reporter && issue.reporter.email ? issue.reporter.email : '';
-                                if (reporterEmail === datosUsuarioDB.email || datosUsuarioDB.email === 'admin@admin.com') { // Quitar condicional admin en produccion si no es deseado
-                                    encontrado = true;
-                                    
-                                    const estadoMt = issue.status ? issue.status.name : 'Desconocido';
-                                    const categoria = issue.category && issue.category.name ? issue.category.name : 'N/A';
-                                    const resumen = issue.summary || 'Sin resumen';
-                                    const descripcion = issue.description || 'Sin descripción';
-                                    
-                                    await msg.reply(
-                                        `📋 *Detalle del Ticket (MantisBT)*\n\n` +
-                                        `🆔 *ID:* #${issue.id}\n` +
-                                        `📌 *Estado:* ${estadoMt}\n` +
-                                        `📁 *Categoría:* ${categoria}\n` +
-                                        `📑 *Resumen:* ${resumen}\n\n` +
-                                        `📝 *Descripción completa:*\n${descripcion}`
-                                    );
-
-                                    // Procesar y enviar adjuntos si los hay
-                                    if (issue.attachments && issue.attachments.length > 0) {
-                                        await msg.reply('⏳ *Descargando archivos adjuntos...*');
-                                        for (let adj of issue.attachments) {
-                                            try {
-                                                const fileResp = await axios.get(`${mantisUrl}/issues/${issue.id}/files/${adj.id}`, {
-                                                    headers: { 'Authorization': mantisKey }
-                                                });
-                                                
-                                                if (fileResp.data && fileResp.data.files && fileResp.data.files.length > 0) {
-                                                    const fileData = fileResp.data.files[0];
-                                                    const base64Data = fileData.content;
-                                                    
-                                                    if (base64Data) {
-                                                        const media = new MessageMedia(
-                                                            adj.content_type || 'application/octet-stream', 
-                                                            base64Data, 
-                                                            adj.filename || 'archivo_adjunto'
-                                                        );
-                                                        await msg.reply(media);
-                                                    }
-                                                }
-                                            } catch (fileErr) {
-                                                console.error(`Error bajando adjunto ${adj.id} de Mantis:`, fileErr.message);
-                                                await msg.reply(`❌ No se pudo descargar el archivo: ${adj.filename}`);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Ticket existe pero no le pertenece
-                                    await msg.reply('🔒 No tienes permiso para ver los detalles de este ticket.');
-                                    encontrado = true; // Paramos busqueda
-                                }
-                            }
-                        } catch (apiErr) {
-                            if (apiErr.response && apiErr.response.status === 404) {
-                                // NO hacer nada, dejar que caiga al mensaje final de no encontrado
-                            } else {
-                                console.error('Error detallado MantisBT API:', apiErr.message);
-                            }
-                        }
-                    }
-                }
-
                 if (!encontrado) {
-                    await msg.reply('🤷‍♂️ No encontré ningún reporte tuyo con ese ID exacto. Verifica que el ID esté bien escrito (ej. "#123456" para osTicket o "15" para Mantis).');
+                    await msg.reply('🤷‍♂️ No encontré ningún reporte con ese ID exacto. Verifica que el ID esté bien escrito (incluye el símbolo #, ej. "#12345").');
                 }
 
             } catch (err) {
@@ -1018,45 +897,55 @@ client.on('message_create', async (msg) => {
 
             if (!dataPendiente?.mensajeCompleto) {
                 estadosUsuario[usuario] = 'CREANDO_TICKET';
-                await msg.reply('⚠️ Ocurrió un detalle. Escribe tu problema de nuevo y al final escribe *fin*.');
+                await msg.reply(
+                    '⚠️ Ocurrió un detalle. Por favor, describe tu problema de nuevo.\n' +
+                    '(Puedes enviar varios mensajes separados).\n\n' +
+                    '⚠️ *MUY IMPORTANTE: Cuando hayas terminado TODA tu explicación, envía un ÚLTIMO mensaje nuevo que diga únicamente la palabra "fin" para continuar.*'
+                );
                 return;
             }
 
-            if (normalizado === '1') {
+            if (msg.hasMedia) {
+                // Se brincó el paso visual y envió la foto nativa directo, lo procesamos
                 estadosUsuario[usuario] = 'ESPERANDO_ARCHIVO';
-                await msg.reply('📎 Perfecto. Envía el archivo ahora (imagen, PDF, etc.).');
+            } else if (normalizado === '1' || normalizado === 'si' || normalizado === 's') {
+                estadosUsuario[usuario] = 'ESPERANDO_ARCHIVO';
+                await msg.reply('📎 Perfecto. Envía el archivo o toma la foto ahora.');
                 return;
-            }
-
-            if (normalizado === '2') {
+            } else if (normalizado === '2' || normalizado === 'no' || normalizado === 'n') {
                 try {
+                    await msg.reply('⏳ *Generando tu ticket oficial en nuestro sistema...*\nUn momento por favor.');
                     await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, null);
-
                     delete pendientesAdjunto[usuario];
                     delete bufferTicket?.[usuario];
-
                 } catch (err) {
                     console.error('Error osTicket:', err);
-                    await msg.reply(
-                        '❌ Hubo un error al crear el ticket.\n\n' +
-                        '1. Escribe *fin* para reintentar.\n' +
-                        '2. Escribe *0* para cancelar y volver al menú.'
-                    );
+                    await msg.reply('❌ Hubo un error de conexión al crear el ticket.\nInicia tu reporte de nuevo.');
                     estadosUsuario[usuario] = 'CREANDO_TICKET';
                 }
                 return;
+            } else {
+                await msg.reply('⚠️ Opción inválida. Responde:\n1 Sí\n2 No');
+                return;
             }
-
-            await msg.reply('⚠️ Opción inválida. Responde:\n1 Sí\n2 No');
-            return;
         }
 
-        // ✅ Recibir el archivo si dijo "1 Sí"
+        // ✅ Recibir el archivo si dijo "1 Sí" o envió media directo
         if (estado === 'ESPERANDO_ARCHIVO') {
+            pendientesAdjunto = pendientesAdjunto || {};
+            const dataPendiente = pendientesAdjunto[usuario];
 
             if (normalizado === '2' || normalizado === 'no') {
-                estadosUsuario[usuario] = 'PREGUNTA_ADJUNTO';
-                await msg.reply('📎 Entendido. Responde:\n2 No');
+                try {
+                    await msg.reply('⏳ *Generando tu ticket oficial en nuestro sistema...*\nUn momento por favor.');
+                    await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, null);
+                    delete pendientesAdjunto[usuario];
+                    delete bufferTicket?.[usuario];
+                } catch (err) {
+                    console.error('Error osTicket:', err);
+                    await msg.reply('❌ Hubo un error de conexión al crear el ticket.\nInicia tu reporte de nuevo.');
+                    estadosUsuario[usuario] = 'CREANDO_TICKET';
+                }
                 return;
             }
 
@@ -1072,6 +961,7 @@ client.on('message_create', async (msg) => {
 
                 if (msg.hasMedia) {
                     try {
+                        await msg.reply('⏳ *Recibiendo archivo y generando tu ticket oficial...*\nUn momento por favor.');
                         const media = await msg.downloadMedia();
                         console.log('MIME:', media?.mimetype);
                         console.log('FILENAME:', media?.filename);
@@ -1465,7 +1355,7 @@ const server = http.createServer(async (req, res) => {
                 project: { id: 1 } 
             };
             
-            const resp = await axios.post(`${mantisUrl}/index.php/issues`, issuePayload, {
+            const resp = await axios.post(`${mantisUrl}api/rest/issues`, issuePayload, {
                 headers: { 
                     'Authorization': mantisKey,
                     'Content-Type': 'application/json'
