@@ -169,10 +169,12 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
                 }
             };
 
+            console.log(`[osTicket] Enviando petición a: ${OSTICKET_URL}`);
             const req = lib.request(options, (res) => {
                 let body = '';
                 res.on('data', (c) => body += c);
                 res.on('end', () => {
+                    console.log(`[osTicket] Respuesta recibida: ${res.statusCode}`);
                     if (res.statusCode === 201 || res.statusCode === 200) {
                         let parsed = null;
                         try { parsed = JSON.parse(body); } catch (_) { }
@@ -185,7 +187,7 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
                             null;
 
                         const ticketFromText = (!ticketFromJson && typeof body === 'string')
-                            ? (body.match(/\b\d{5,}\b/)?.[0] || null)
+                            ? (body.trim().match(/^\d+$/) ? body.trim() : (body.match(/\b\d{4,}\b/)?.[0] || null))
                             : null;
 
                         resolve({
@@ -200,10 +202,14 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
                 });
             });
 
-            req.on('error', (e) => reject(e));
+            req.on('error', (e) => {
+                console.error(`[osTicket] Error de red/petición:`, e.message);
+                reject(e);
+            });
             req.write(data);
             req.end();
         } catch (urlErr) {
+            console.error(`[osTicket] Error en la URL o configuración:`, urlErr.message);
             reject(urlErr);
         }
     });
@@ -231,6 +237,7 @@ function menuSoporte() {
     return `*SOPORTE TÉCNICO*
 1 Reportar problema
 2 Ver mis tickets
+3 Hablar con un asesor (Llamada)
 0 Volver al menú`;
 }
 
@@ -413,37 +420,36 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
         mensaje: mensajeCompleto,
         attachments
     });
+    
+    console.log(`[osTicket] Resultado de la creación:`, JSON.stringify(respuestaOsTicket));
 
-    // Intentar extraer ID del body
-    let bodyStr = '';
-    if (typeof respuestaOsTicket === 'string') bodyStr = respuestaOsTicket;
-    else if (respuestaOsTicket.ticket) bodyStr = String(respuestaOsTicket.ticket);
-    else if (respuestaOsTicket.rawBody) bodyStr = String(respuestaOsTicket.rawBody);
-    else if (respuestaOsTicket.body) bodyStr = String(respuestaOsTicket.body);
+    if (!respuestaOsTicket.ok) {
+        console.error(`[osTicket] Error al crear ticket: ${respuestaOsTicket.statusCode} - ${respuestaOsTicket.body}`);
+        await msg.reply(`❌ *Error al crear el ticket en el sistema:* ${respuestaOsTicket.statusCode}\n\nPor favor, contacta a soporte técnico directamente.`);
+        return;
+    }
 
-    const idTicketCreado = bodyStr.match(/\b\d+\b/)?.[0] || 'TICKET-OS';
+    // Utilizar el ID del ticket ya procesado
+    const idTicketCreado = respuestaOsTicket.ticket || 'TICKET-OS';
 
-    // ✅ Guardar en tu tabla local tickets_whatsapp
-    await conexion.query(
+    // ✅ Guardar en tu tabla local tickets_whatsapp (En segundo plano)
+    conexion.query(
         `INSERT INTO tickets_whatsapp 
          (telefono, nombre, email, mensaje, ticket_id_osticket, tipo_usuario, fecha_creacion)
          VALUES (?, ?, ?, ?, ?, ?, NOW())`,
         [telefono, nombre, email, mensajeCompleto, idTicketCreado, tipoUsuario]
-    );
+    ).catch(err => console.error(`[DB err] Error guardando ticket local:`, err.message));
 
-    // ✅ Notificar al Admin por correo (Aviso de nuevo ticket)
+    // ✅ Notificar al Admin por correo (Aviso de nuevo ticket - En segundo plano)
     if (idTicketCreado) {
-        try {
-            await emailService.enviarNotificacionAdmin({
-                cliente: nombre,
-                emailCliente: email,
-                ticketId: idTicketCreado,
-                fuente: 'WhatsApp'
-            });
-            
-        } catch (mailErr) {
+        emailService.enviarNotificacionAdmin({
+            cliente: nombre,
+            emailCliente: email,
+            ticketId: idTicketCreado,
+            fuente: 'WhatsApp'
+        }).catch(mailErr => {
             console.error(`[${ts()}] Error enviando correos post-creación:`, mailErr.message);
-        }
+        });
     }
 
     estadosUsuario[usuario] = 'POST_TICKET';
@@ -452,6 +458,7 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
         '✅ Tu ticket ha sido creado correctamente en nuestro sistema.\n' +
         (idTicketCreado ? `🆔 Ticket ID: *${idTicketCreado}*\n` : '') +
         'Un técnico te contactará pronto.\n\n' +
+        '💡 *Nota:* Si tu problema es urgente o no se resuelve, puedes usar la opción de *Llamada* en el menú de soporte.\n\n' +
         '¿Qué deseas hacer ahora?\n' +
         '1 Volver al menú\n' +
         '2 Salir'
@@ -490,7 +497,8 @@ async function onClientReady() {
         console.log(`[${ts()}] WhatsApp conectado correctamente`);
 
         const myWid = client.info?.wid?._serialized || '';
-        const myDigits = onlyDigits(myWid);
+        const cleanedWid = myWid.split('@')[0].split(':')[0];
+        const myDigits = onlyDigits(cleanedWid);
         numeroConectado = myDigits ? myDigits.slice(-10) : null;
 
         console.log(`[${ts()}] Mi número WhatsApp: ${myWid}`);
@@ -537,7 +545,7 @@ client.on('message_create', async (msg) => {
         .replace(/[\u0300-\u036f]/g, '');
 
     const usuario = msg.from;
-    const telefonoOriginalFull = usuario.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '');
+    const telefonoOriginalFull = usuario.split('@')[0].split(':')[0];
     const variantes = obtenerVariantesMX(telefonoOriginalFull);
     const telefono = variantes[0]; // Usamos la principal para registros nuevos
 
@@ -800,6 +808,16 @@ client.on('message_create', async (msg) => {
                     }
                     break;
 
+                case '3':
+                    await msg.reply(
+                        '📞 *Contacto Directo*\n\n' +
+                        'Puedes comunicarte con nosotros al siguiente número:\n' +
+                        '*446 115 6943*\n\n' +
+                        '🕒 Horario de atención: Lunes a Viernes de 9 AM a 6 PM.\n' +
+                        'Si llamas fuera de horario, por favor deja un mensaje de voz o crea un ticket.'
+                    );
+                    break;
+
                 case '0':
                     estadosUsuario[usuario] = 'MENU_PRINCIPAL';
                     await msg.reply(menuPrincipal());
@@ -1048,7 +1066,8 @@ client.on('message_create', async (msg) => {
         console.error('Error procesando mensaje:', error);
     } finally {
         try {
-            const numeroOrigen10 = last10(msg.from);
+            const cleanedFrom = msg.from.split('@')[0].split(':')[0];
+            const numeroOrigen10 = last10(cleanedFrom);
             const numeroDestino10 = last10(numeroConectado);
 
             const data = {
@@ -1254,7 +1273,14 @@ class Email {
                     await transporter.sendMail({
                         from: `"Bot Soporte" <${process.env.SMTP_USER}>`,
                         to: targetEmail,
-                        subject: `Nuevo Ticket [${ticketId}] - ${cliente}`,
+                        subject: `🚨 Nuevo Ticket [${ticketId}] - ${cliente}`,
+                        priority: 'high',
+                        importance: 'high',
+                        headers: {
+                            'X-Priority': '1',
+                            'X-MSMail-Priority': 'High',
+                            'Importance': 'High'
+                        },
                         text: `Se ha creado un nuevo ticket.\n\n` +
                             `Cliente: ${cliente}\n` +
                             `Email: ${emailCliente}\n` +
