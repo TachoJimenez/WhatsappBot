@@ -545,12 +545,16 @@ client.on('message_create', async (msg) => {
         .replace(/[\u0300-\u036f]/g, '');
 
     const usuario = msg.from;
-    const telefonoOriginalFull = usuario.split('@')[0].split(':')[0];
+    
+    // ✅ Intentar obtener el número real del contacto (para evitar LIDs extraños)
+    const contactoInfo = await msg.getContact();
+    const telefonoOriginalFull = (contactoInfo.number || usuario.split('@')[0]).split(':')[0];
+    
     const variantes = obtenerVariantesMX(telefonoOriginalFull);
     const telefono = variantes[0]; // Usamos la principal para registros nuevos
 
-    console.log(`[DEBUG] RAW: "${textoOriginal}" | NORM: "${normalizado}" | ESTADO: ${estadosUsuario[usuario]} | VAR: ${variantes.join(',')}`);
-    console.log(`[${ts()}] Mensaje recibido de ${usuario}`);
+    console.log(`[DEBUG] RAW: "${textoOriginal}" | NORM: "${normalizado}" | ESTADO: ${estadosUsuario[usuario]} | NUM: ${telefonoOriginalFull}`);
+    console.log(`[${ts()}] Mensaje recibido de ${telefonoOriginalFull}`);
 
     // --- CONTROL DE MANTENIMIENTO ---
     if (isMaintenanceMode) {
@@ -1367,7 +1371,7 @@ const server = http.createServer(async (req, res) => {
             
             // Fix 404 by explicitly calling index.php
             const mantisUrl = process.env.MANTISBT_URL;
-            const mantisKey = process.env.MANTISBT_API_KEY;
+            const mantisKey = (process.env.MANTISBT_API_KEY || '').trim();
             
             if (!mantisUrl || !mantisKey || mantisKey === 'YOUR_API_KEY_HERE') {
                 res.statusCode = 500;
@@ -1381,18 +1385,37 @@ const server = http.createServer(async (req, res) => {
                 project: { id: 1 } 
             };
             
-            const resp = await axios.post(`${mantisUrl}api/rest/issues`, issuePayload, {
+            // Normalizar URL (asegurar que termine en /)
+            let baseMantis = mantisUrl.endsWith('/') ? mantisUrl : mantisUrl + '/';
+            // Incluir index.php para compatibilidad con servidores sin mod_rewrite
+            const apiUrl = `${baseMantis}api/rest/index.php/issues`;
+
+            console.log(`[MantisBT] Intentando exportar a: ${apiUrl}`);
+
+            const resp = await axios.post(apiUrl, issuePayload, {
                 headers: { 
                     'Authorization': mantisKey,
+                    'X-Mantis-Bot-Token': mantisKey, // Cabecera personalizada para evadir Apache
                     'Content-Type': 'application/json'
-                }
+                },
+                timeout: 10000 // 10 segundos
             });
             
+            console.log(`[MantisBT] Éxito: Ticket creado con ID ${resp.data.issue.id}`);
             res.statusCode = 200;
             return res.end(JSON.stringify({ ok: true, message: 'Exportado correctamente', mantisId: resp.data.issue.id }));
 
         } catch (err) {
-            console.error('Error exportando a MantisBT:', err.response ? JSON.stringify(err.response.data) : err.message);
+            let detail = '';
+            if (err.response) {
+                detail = `Status: ${err.response.status} | Data: ${JSON.stringify(err.response.data)}`;
+            } else if (err.request) {
+                detail = `Sin respuesta del servidor (Request sent but no response). Code: ${err.code}`;
+            } else {
+                detail = `Error de configuración/red: ${err.message}`;
+            }
+            
+            console.error(`[MantisBT] Error Crítico:`, detail);
             res.statusCode = 500;
             return res.end(JSON.stringify({ ok: false, message: 'Error interno exportando a MantisBT' }));
         }
