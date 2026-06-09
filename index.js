@@ -563,8 +563,8 @@ client.on('message_create', async (msg) => {
     const variantes = obtenerVariantesMX(telefonoOriginalFull);
     const telefono = variantes[0]; // Usamos la principal para registros nuevos
 
-    console.log(`[DEBUG] RAW: "${textoOriginal}" | NORM: "${normalizado}" | ESTADO: ${estadosUsuario[usuario]} | NUM: ${telefonoOriginalFull}`);
-    console.log(`[${ts()}] Mensaje recibido de ${telefonoOriginalFull}`);
+    console.log(`[DEBUG] RAW: "${textoOriginal}" | NORM: "${normalizado}" | ESTADO: ${estadosUsuario[usuario]} | NUM: ${telefono} | VAR: ${variantes}`);
+    console.log(`[${ts()}] Mensaje recibido de ${telefono}`);
 
     // --- CONTROL DE MANTENIMIENTO ---
     if (isMaintenanceMode) {
