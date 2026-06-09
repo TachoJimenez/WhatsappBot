@@ -265,8 +265,8 @@ const esperandoNombre = {};
 const esperandoEmail = {};
 const bufferMensajes = {};  // buffer para mensajes multiparte (legacy)
 const memoriaUsuarios = {}; // { '521...': { topicId: 1, topicName: '...' } }
-let bufferTicket = {};      // ✅ NUEVO: buffer para el snippet del usuario
-let pendientesAdjunto = {}; // ✅ NUEVO: para guardar mensaje mientras decide adjuntar
+let bufferTicket = {};      // NUEVO: buffer para el snippet del usuario
+let pendientesAdjunto = {}; // NUEVO: para guardar mensaje mientras decide adjuntar
 
 // Variables Dashboard React
 let isMaintenanceMode = false; // Bloquea bot en caso de fallo crítico
@@ -373,7 +373,7 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
         return;
     }
 
-    // ✅ Construir adjuntos si existen
+    // Construir adjuntos si existen
     const attachments = [];
 
     // archivoPath aquí en realidad es el objeto "media" de whatsapp-web.js (downloadMedia())
@@ -381,12 +381,12 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
         let base64 = archivoPath.data;
         let type = archivoPath.mimetype || 'application/octet-stream';
 
-        // ✅ Asegurar SOLO base64 (si viene data:image/...;base64,... lo limpiamos)
+        // Asegurar SOLO base64 (si viene data:image/...;base64,... lo limpiamos)
         if (typeof base64 === 'string' && base64.includes('base64,')) {
             base64 = base64.split('base64,')[1];
         }
 
-        // ✅ Asegurar nombre + extensión
+        // Asegurar nombre + extensión
         let fileName = archivoPath.filename && String(archivoPath.filename).trim()
             ? String(archivoPath.filename).trim()
             : null;
@@ -402,17 +402,17 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
             }
         }
 
-        // ✅ Log útil para confirmar que NO son 29 bytes
+        // Log útil para confirmar que NO son 29 bytes
         console.log('[Adjunto] name:', fileName, '| type:', type, '| base64 length:', base64?.length);
 
         attachments.push({
             name: fileName,
-            data: base64,   // ✅ SOLO base64 limpio
+            data: base64,   // SOLO base64 limpio
             type: type
         });
     }
 
-    // ✅ Crear ticket en osTicket
+    // Crear ticket en osTicket
     const respuestaOsTicket = await crearTicketOsTicket({
         nombre,
         email,
@@ -432,7 +432,7 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
     // Utilizar el ID del ticket ya procesado
     const idTicketCreado = respuestaOsTicket.ticket || 'TICKET-OS';
 
-    // ✅ Guardar en tu tabla local tickets_whatsapp (En segundo plano)
+    // Guardar en tu tabla local tickets_whatsapp (En segundo plano)
     conexion.query(
         `INSERT INTO tickets_whatsapp 
          (telefono, nombre, email, mensaje, ticket_id_osticket, tipo_usuario, fecha_creacion)
@@ -440,7 +440,7 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
         [telefono, nombre, email, mensajeCompleto, idTicketCreado, tipoUsuario]
     ).catch(err => console.error(`[DB err] Error guardando ticket local:`, err.message));
 
-    // ✅ Notificar al Admin por correo (Aviso de nuevo ticket - En segundo plano)
+    // Notificar al Admin por correo (Aviso de nuevo ticket - En segundo plano)
     if (idTicketCreado) {
         emailService.enviarNotificacionAdmin({
             cliente: nombre,
