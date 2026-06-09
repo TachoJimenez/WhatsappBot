@@ -174,12 +174,19 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
                 let body = '';
                 res.on('data', (c) => body += c);
                 res.on('end', () => {
-                    console.log(`[osTicket] Respuesta recibida: ${res.statusCode}`);
+                    console.log(`[osTicket] Respuesta recibida | Status: ${res.statusCode} | Body: "${body}"`);
                     if (res.statusCode === 201 || res.statusCode === 200) {
                         let parsed = null;
                         try { parsed = JSON.parse(body); } catch (_) { }
 
+                        // Si JSON.parse devolvió un número o string directo (ej: 929384 o "929384")
+                        const ticketFromPrimitive =
+                            (typeof parsed === 'number') ? String(parsed) :
+                            (typeof parsed === 'string' && parsed.trim().match(/^\d+$/)) ? parsed.trim() :
+                            null;
+
                         const ticketFromJson =
+                            ticketFromPrimitive ||
                             parsed?.ticket?.number ||
                             parsed?.number ||
                             parsed?.ticket_number ||
@@ -187,14 +194,17 @@ function crearTicketOsTicket({ nombre, email, telefono, mensaje, topicId, attach
                             null;
 
                         const ticketFromText = (!ticketFromJson && typeof body === 'string')
-                            ? (body.trim().match(/^\d+$/) ? body.trim() : (body.match(/\b\d{4,}\b/)?.[0] || null))
+                            ? (body.trim().match(/^\d+$/) ? body.trim() : (body.match(/\b\d{2,}\b/)?.[0] || null))
                             : null;
+
+                        const finalTicket = ticketFromJson || ticketFromText;
+                        console.log(`[osTicket] Ticket extraído: ${finalTicket} | parsed=${JSON.stringify(parsed)} | fromJson=${ticketFromJson} | fromText=${ticketFromText}`);
 
                         resolve({
                             ok: true,
                             status: res.statusCode,
                             rawBody: body,
-                            ticket: ticketFromJson || ticketFromText
+                            ticket: finalTicket
                         });
                     } else {
                         resolve({ ok: false, statusCode: res.statusCode, body: body });
