@@ -1166,6 +1166,10 @@ class Email {
     }
 
     async start() {
+        if (process.env.ENABLE_EMAIL_POLLING !== 'true') {
+            console.log(`[${ts()}] Email | Lector de correos entrantes (IMAP) desactivado por configuración.`);
+            return;
+        }
         console.log(`[${ts()}] Email | Servicio iniciado correctamente.`);
         this.poll();
         setInterval(() => this.poll(), this.interval);
