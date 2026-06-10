@@ -231,8 +231,8 @@ function esEmailValido(email) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(String(email || '').trim());
 }
 
-const OSTICKET_URL = process.env.OSTICKET_URL;
-const OSTICKET_API_KEY = process.env.OSTICKET_API_KEY;
+const OSTICKET_URL = (process.env.OSTICKET_URL || '').trim();
+const OSTICKET_API_KEY = (process.env.OSTICKET_API_KEY || '').trim();
 
 
 function menuPrincipal() {
