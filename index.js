@@ -573,9 +573,14 @@ client.on('message_create', async (msg) => {
 
     // --- CONTROL DE MANTENIMIENTO ---
     if (isMaintenanceMode) {
-        await msg.reply('🛠️ *Nuestro sistema de soporte se encuentra actualmente en mantenimiento de red.* Por favor, intente enviar su solicitud más tarde.');
-        console.log(`[${ts()}] Bloqueado por Mantenimiento: ${telefono}`);
-        return;
+        const estado = estadosUsuario[usuario];
+        const estaActivo = estado && estado !== 'POST_TICKET' && estado !== 'MENU_PRINCIPAL';
+
+        if (!estaActivo) {
+            await msg.reply('🛠️ *Nuestro sistema de soporte se encuentra actualmente en mantenimiento de red.* Por favor, intente enviar su solicitud más tarde.');
+            console.log(`[${ts()}] Bloqueado por Mantenimiento: ${telefono}`);
+            return;
+        }
     }
 
     // --- CONTROL DE ACCESO (Abierto / Cerrado) ---
@@ -1534,7 +1539,29 @@ const server = http.createServer(async (req, res) => {
         try {
             const data = JSON.parse(body);
             if (typeof data.active === 'boolean') {
+                const wasMaintenance = isMaintenanceMode;
                 isMaintenanceMode = data.active;
+
+                // Si se activa el mantenimiento, avisar a los usuarios que estén en medio de una operación
+                if (isMaintenanceMode && !wasMaintenance) {
+                    const usuariosActivos = Object.keys(estadosUsuario).filter(user => {
+                        const est = estadosUsuario[user];
+                        return est && est !== 'POST_TICKET' && est !== 'MENU_PRINCIPAL';
+                    });
+
+                    for (const user of usuariosActivos) {
+                        try {
+                            await client.sendMessage(user, 
+                                '⚠️ *Atención:* Nuestro sistema de soporte entrará en mantenimiento en unos minutos.\n\n' +
+                                'Si te encuentras redactando un reporte o realizando una consulta, no te preocupes: *el sistema te permitirá terminar tu proceso actual* antes de pausarse.'
+                            );
+                            console.log(`[Mantenimiento] Notificación enviada a usuario activo: ${user}`);
+                        } catch (sendErr) {
+                            console.error(`[Mantenimiento] Error notificando a ${user}:`, sendErr.message);
+                        }
+                    }
+                }
+
                 res.statusCode = 200;
                 return res.end(JSON.stringify({ ok: true, isMaintenanceMode, message: 'Estado de mantenimiento actualizado' }));
             } else {
