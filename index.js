@@ -435,8 +435,12 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
 
     if (!respuestaOsTicket.ok) {
         console.error(`[osTicket] Error al crear ticket: ${respuestaOsTicket.statusCode} - ${respuestaOsTicket.body}`);
-        await msg.reply(`❌ *Error al crear el ticket en el sistema:* ${respuestaOsTicket.statusCode}\n\nPor favor, contacta a soporte técnico directamente.`);
-        return;
+        await msg.reply(
+            `❌ *Error al crear el ticket en el sistema:* ${respuestaOsTicket.statusCode}\n\n` +
+            `Por favor, contacta a soporte técnico directamente.\n\n` +
+            `👉 Escribe *0* para regresar al menú principal, o describe tu problema de nuevo para intentar otra vez.`
+        );
+        return false;
     }
 
     // Utilizar el ID del ticket ya procesado
@@ -473,6 +477,7 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
         '1 Volver al menú\n' +
         '2 Salir'
     );
+    return true;
 }
 
 // -------------------------------------------------------------
@@ -947,9 +952,13 @@ client.on('message_create', async (msg) => {
             } else if (normalizado === '2' || normalizado === 'no' || normalizado === 'n') {
                 try {
                     await msg.reply('⏳ *Generando tu ticket oficial en nuestro sistema...*\nUn momento por favor.');
-                    await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, null);
+                    const creado = await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, null);
                     delete pendientesAdjunto[usuario];
                     delete bufferTicket?.[usuario];
+                    if (!creado) {
+                        estadosUsuario[usuario] = 'CREANDO_TICKET';
+                        return;
+                    }
                 } catch (err) {
                     console.error('Error osTicket:', err);
                     await msg.reply('❌ Hubo un error de conexión al crear el ticket.\nInicia tu reporte de nuevo.');
@@ -970,9 +979,13 @@ client.on('message_create', async (msg) => {
             if (normalizado === '2' || normalizado === 'no') {
                 try {
                     await msg.reply('⏳ *Generando tu ticket oficial en nuestro sistema...*\nUn momento por favor.');
-                    await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, null);
+                    const creado = await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, null);
                     delete pendientesAdjunto[usuario];
                     delete bufferTicket?.[usuario];
+                    if (!creado) {
+                        estadosUsuario[usuario] = 'CREANDO_TICKET';
+                        return;
+                    }
                 } catch (err) {
                     console.error('Error osTicket:', err);
                     await msg.reply('❌ Hubo un error de conexión al crear el ticket.\nInicia tu reporte de nuevo.');
@@ -1017,7 +1030,13 @@ client.on('message_create', async (msg) => {
                             console.log('Adjunto preparado correctamente:', fileName, media.mimetype);
 
                             // Enviamos con el archivo descargado en memoria (base64)
-                            await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, media);
+                            const creado = await finalizarCreacionTicket(msg, usuario, telefono, dataPendiente.mensajeCompleto, media);
+                            if (!creado) {
+                                delete pendientesAdjunto[usuario];
+                                delete bufferTicket?.[usuario];
+                                estadosUsuario[usuario] = 'CREANDO_TICKET';
+                                return;
+                            }
 
                         } else {
                             throw new Error('No se pudo descargar el medio (sin data).');
