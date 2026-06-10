@@ -247,7 +247,7 @@ function menuSoporte() {
     return `*SOPORTE TÉCNICO*
 1 Reportar problema
 2 Ver mis tickets
-3 Hablar con un asesor (Llamada)
+3 Hablar con un asesor mediante correo
 0 Volver al menú`;
 }
 
@@ -472,7 +472,7 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
         '✅ Tu ticket ha sido creado correctamente en nuestro sistema.\n' +
         (idTicketCreado ? `🆔 Ticket ID: *${idTicketCreado}*\n` : '') +
         'Un técnico te contactará pronto.\n\n' +
-        '💡 *Nota:* Si tu problema es urgente o no se resuelve, puedes usar la opción de *Llamada* en el menú de soporte.\n\n' +
+        '💡 *Nota:* Si tu problema es urgente o no se resuelve, puedes consultar la opción *3* (Hablar con un asesor mediante correo) en el menú de soporte.\n\n' +
         '¿Qué deseas hacer ahora?\n' +
         '1 Volver al menú\n' +
         '2 Salir'
@@ -812,7 +812,7 @@ client.on('message_create', async (msg) => {
                         } else {
                             osTickets.forEach(t => {
                                 const idOs = t.ticket_id_osticket || 'Pendiente';
-                                const fecha = new Date(t.fecha_creacion).toLocaleDateString();
+                                const fecha = new Date(t.fecha_creacion).toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' });
                                 const extracto = t.mensaje.substring(0, 30).replace(/\n/g, ' ') + '...';
                                 msgList += `🆔 *#${idOs}* (${fecha})\n📝 ${extracto}\n\n`;
                             });
@@ -827,15 +827,16 @@ client.on('message_create', async (msg) => {
                     }
                     break;
 
-                case '3':
+                case '3': {
+                    const soporteEmail = (process.env.SMTP_USER || 'noeljim181@gmail.com').trim();
                     await msg.reply(
-                        '📞 *Contacto Directo*\n\n' +
-                        'Puedes comunicarte con nosotros al siguiente número:\n' +
-                        '*446 115 6943*\n\n' +
-                        '🕒 Horario de atención: Lunes a Viernes de 9 AM a 6 PM.\n' +
-                        'Si llamas fuera de horario, por favor deja un mensaje de voz o crea un ticket.'
+                        '✉️ *Contacto por Correo*\n\n' +
+                        'Puedes comunicarte con un asesor enviando un correo a la siguiente dirección:\n' +
+                        `*${soporteEmail}*\n\n` +
+                        '🕒 Horario de atención: Lunes a Viernes de 9 AM a 6 PM.'
                     );
                     break;
+                }
 
                 case '0':
                     estadosUsuario[usuario] = 'MENU_PRINCIPAL';
@@ -874,10 +875,11 @@ client.on('message_create', async (msg) => {
                     if (ticketOs && ticketOs.length > 0) {
                         encontrado = true;
                         const t = ticketOs[0];
+                        const fechaFormateada = new Date(t.fecha_creacion).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
                         await msg.reply(
                             `📋 *Detalle del Ticket (osTicket)*\n\n` +
                             `🆔 *ID:* ${t.ticket_id_osticket}\n` +
-                            `📅 *Fecha:* ${new Date(t.fecha_creacion).toLocaleString()}\n` +
+                            `📅 *Fecha:* ${fechaFormateada}\n` +
                             `📝 *Tu reporte original:*\n${t.mensaje}`
                         );
                     }
