@@ -446,12 +446,16 @@ async function finalizarCreacionTicket(msg, usuario, telefono, mensajeCompleto, 
     // Utilizar el ID del ticket ya procesado
     const idTicketCreado = respuestaOsTicket.ticket || 'TICKET-OS';
 
+    const attachmentsJson = attachments.length > 0
+        ? JSON.stringify(attachments.map(a => ({ filename: a.name, mimetype: a.type })))
+        : null;
+
     // Guardar en tu tabla local tickets_whatsapp (En segundo plano)
     conexion.query(
         `INSERT INTO tickets_whatsapp 
-         (telefono, nombre, email, mensaje, ticket_id_osticket, tipo_usuario, fecha_creacion)
-         VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-        [telefono, nombre, email, mensajeCompleto, idTicketCreado, tipoUsuario]
+         (telefono, nombre, email, mensaje, ticket_id_osticket, tipo_usuario, fecha_creacion, attachments)
+         VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)`,
+        [telefono, nombre, email, mensajeCompleto, idTicketCreado, tipoUsuario, attachmentsJson]
     ).catch(err => console.error(`[DB err] Error guardando ticket local:`, err.message));
 
     // Notificar al Admin por correo (Aviso de nuevo ticket - En segundo plano)
@@ -1497,13 +1501,30 @@ const server = http.createServer(async (req, res) => {
                     mensaje as subject, 
                     fecha_creacion as lastActivity, 
                     ticket_id_osticket as externalId,
-                    'osTicket' as source
+                    'osTicket' as source,
+                    attachments
                 FROM tickets_whatsapp 
                 ORDER BY fecha_creacion DESC 
                 LIMIT 50
             `);
+            const tickets = rows.map(row => {
+                let parsedAttachments = null;
+                if (row.attachments) {
+                    try {
+                        parsedAttachments = typeof row.attachments === 'string'
+                            ? JSON.parse(row.attachments)
+                            : row.attachments;
+                    } catch (e) {
+                        console.error('Error parsing attachments JSON:', e);
+                    }
+                }
+                return {
+                    ...row,
+                    attachments: parsedAttachments
+                };
+            });
             res.statusCode = 200;
-            return res.end(JSON.stringify({ ok: true, tickets: rows }));
+            return res.end(JSON.stringify({ ok: true, tickets }));
         } catch (err) {
             res.statusCode = 500;
             return res.end(JSON.stringify({ ok: false, message: err.message }));
@@ -1519,13 +1540,29 @@ const server = http.createServer(async (req, res) => {
                 return res.end(JSON.stringify({ ok: false, message: 'Se requiere ID de cliente' }));
             }
             const rows = await conexion.query(`
-                SELECT id, ticket_id_osticket, fecha_creacion as fecha_reporte, mensaje as mensaje_original
+                SELECT id, ticket_id_osticket, fecha_creacion as fecha_reporte, mensaje as mensaje_original, attachments
                 FROM tickets_whatsapp
                 WHERE telefono = ?
                 ORDER BY fecha_creacion DESC
             `, [telefonoId]);
+            const history = rows.map(row => {
+                let parsedAttachments = null;
+                if (row.attachments) {
+                    try {
+                        parsedAttachments = typeof row.attachments === 'string'
+                            ? JSON.parse(row.attachments)
+                            : row.attachments;
+                    } catch (e) {
+                        console.error('Error parsing attachments JSON:', e);
+                    }
+                }
+                return {
+                    ...row,
+                    attachments: parsedAttachments
+                };
+            });
             res.statusCode = 200;
-            return res.end(JSON.stringify({ ok: true, history: rows }));
+            return res.end(JSON.stringify({ ok: true, history }));
         } catch (err) {
             res.statusCode = 500;
             return res.end(JSON.stringify({ ok: false, message: err.message }));
