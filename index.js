@@ -1496,15 +1496,19 @@ const server = http.createServer(async (req, res) => {
         try {
             const rows = await conexion.query(`
                 SELECT 
-                    id, 
-                    nombre as customer, 
-                    mensaje as subject, 
-                    fecha_creacion as lastActivity, 
-                    ticket_id_osticket as externalId,
+                    tw.id, 
+                    tw.nombre as customer, 
+                    tw.mensaje as subject, 
+                    tw.fecha_creacion as lastActivity, 
+                    tw.ticket_id_osticket as externalId,
                     'osTicket' as source,
-                    attachments
-                FROM tickets_whatsapp 
-                ORDER BY fecha_creacion DESC 
+                    tw.attachments,
+                    ts.name as osticket_status,
+                    t.staff_id as osticket_staff_id
+                FROM tickets_whatsapp tw
+                LEFT JOIN ost_ticket t ON t.number = tw.ticket_id_osticket
+                LEFT JOIN ost_ticket_status ts ON ts.id = t.status_id
+                ORDER BY tw.fecha_creacion DESC 
                 LIMIT 50
             `);
             const tickets = rows.map(row => {
@@ -1518,9 +1522,27 @@ const server = http.createServer(async (req, res) => {
                         console.error('Error parsing attachments JSON:', e);
                     }
                 }
+
+                // Mapear el estado real de osTicket a los estados de React (resolved, process, pending)
+                let status = 'pending';
+                if (row.osticket_status) {
+                    const ostStatus = row.osticket_status.toLowerCase();
+                    if (ostStatus === 'resolved' || ostStatus === 'closed') {
+                        status = 'resolved';
+                    } else if (row.osticket_staff_id && row.osticket_staff_id !== 0) {
+                        status = 'process';
+                    }
+                }
+
                 return {
-                    ...row,
-                    attachments: parsedAttachments
+                    id: row.id,
+                    customer: row.customer,
+                    subject: row.subject,
+                    lastActivity: row.lastActivity,
+                    externalId: row.externalId,
+                    source: row.source,
+                    attachments: parsedAttachments,
+                    status: status
                 };
             });
             res.statusCode = 200;
